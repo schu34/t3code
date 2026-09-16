@@ -331,6 +331,10 @@ const PersistedDraftThreadState = Schema.Struct({
       }),
     ),
   ),
+  // Some surfaces intentionally create independent empty draft sessions. A
+  // remap must leave those sessions addressable until the owning surface
+  // clears or promotes them.
+  retainWhenUnmapped: Schema.optionalKey(Schema.Boolean),
 });
 type PersistedDraftThreadState = typeof PersistedDraftThreadState.Type;
 
@@ -451,6 +455,8 @@ export interface DraftSessionState {
   envMode: DraftThreadEnvMode;
   startFromOrigin: boolean;
   promotedTo?: ScopedThreadRef | null;
+  /** Keep an intentionally independent empty draft after its project mapping moves on. */
+  retainWhenUnmapped?: boolean;
 }
 
 export type DraftThreadState = DraftSessionState;
@@ -524,6 +530,7 @@ interface ComposerDraftStoreState {
       interactionMode?: ProviderInteractionMode;
       environmentSelection?: "auto" | "manual";
       loadBalancedEnvironmentId?: EnvironmentId | null;
+      retainWhenUnmapped?: boolean;
     },
   ) => void;
   /** Creates or updates the draft session tracked for a concrete project ref. */
@@ -541,6 +548,7 @@ interface ComposerDraftStoreState {
       interactionMode?: ProviderInteractionMode;
       environmentSelection?: "auto" | "manual";
       loadBalancedEnvironmentId?: EnvironmentId | null;
+      retainWhenUnmapped?: boolean;
     },
   ) => void;
   /** Updates mutable draft-session metadata without touching composer content. */
@@ -1508,6 +1516,7 @@ function createDraftThreadState(
     interactionMode?: ProviderInteractionMode;
     environmentSelection?: "auto" | "manual";
     loadBalancedEnvironmentId?: EnvironmentId | null;
+    retainWhenUnmapped?: boolean;
   },
 ): DraftThreadState {
   // A project change (including switching environments within a logical
@@ -1561,6 +1570,7 @@ function createDraftThreadState(
       options?.envMode ?? (nextWorktreePath ? "worktree" : (existingThread?.envMode ?? "local")),
     startFromOrigin: nextStartFromOrigin,
     promotedTo: null,
+    retainWhenUnmapped: options?.retainWhenUnmapped ?? existingThread?.retainWhenUnmapped ?? false,
   };
 }
 
@@ -1594,6 +1604,7 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.worktreePath === right.worktreePath &&
     left.envMode === right.envMode &&
     left.startFromOrigin === right.startFromOrigin &&
+    (left.retainWhenUnmapped ?? false) === (right.retainWhenUnmapped ?? false) &&
     scopedThreadRefsEqual(left.promotedTo, right.promotedTo)
   );
 }
@@ -1753,6 +1764,7 @@ function normalizePersistedDraftThreads(
             ? { loadBalancedEnvironmentId: null }
             : {}),
         promotedTo,
+        retainWhenUnmapped: candidateDraftThread.retainWhenUnmapped === true,
       };
     }
   }
@@ -1805,6 +1817,7 @@ function normalizePersistedDraftThreads(
           envMode: "local",
           startFromOrigin: false,
           promotedTo: null,
+          retainWhenUnmapped: false,
         };
       } else if (
         existingDraftThread.projectId !== projectRef.projectId ||
@@ -2092,10 +2105,11 @@ export function partializeComposerDraftStoreState(
   state: ComposerDraftStoreState,
 ): PersistedComposerDraftStoreState {
   // Draft sessions worth persisting: mapped (a new-thread flow targets
-  // them), promoting (mid-send), or holding real user content (they back a
-  // sidebar row). Everything else is a zombie — and its composer blob must
-  // be dropped WITH it, or model/mode-only entries would persist forever
-  // keyed to a session that no longer exists.
+  // them), promoting (mid-send), explicitly retained by an owning surface,
+  // or holding real user content (they back a sidebar row). Everything else
+  // is a zombie — and its composer blob must be dropped WITH it, or
+  // model/mode-only entries would persist forever keyed to a session that no
+  // longer exists.
   const mappedDraftKeys = new Set(
     Object.values(state.logicalProjectDraftThreadKeyByLogicalProjectKey),
   );
@@ -2105,6 +2119,7 @@ export function partializeComposerDraftStoreState(
         ([threadKey, draftThread]) =>
           mappedDraftKeys.has(threadKey) ||
           isDraftThreadPromoting(draftThread) ||
+          draftThread.retainWhenUnmapped === true ||
           composerDraftHasUserContent(state.draftsByThreadKey[threadKey]),
       )
       .map(([threadKey]) => threadKey),
@@ -2502,6 +2517,7 @@ function toHydratedDraftThreadState(
           persistedDraftThread.promotedTo.threadId as ThreadId,
         )
       : null,
+    retainWhenUnmapped: persistedDraftThread.retainWhenUnmapped === true,
   };
 }
 
@@ -2694,6 +2710,8 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 previousThreadKeyForLogicalProject,
               ) &&
               !isDraftThreadPromoting(previousDraftThread) &&
+              previousDraftThread?.retainWhenUnmapped !== true &&
+              options?.retainWhenUnmapped !== true &&
               !composerDraftHasUserContent(
                 state.draftsByThreadKey[previousThreadKeyForLogicalProject],
               )
@@ -2703,6 +2721,25 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 nextDraftsByThreadKey = { ...nextDraftsByThreadKey };
                 delete nextDraftsByThreadKey[previousThreadKeyForLogicalProject];
               }
+            } else if (
+              previousThreadKeyForLogicalProject &&
+              previousThreadKeyForLogicalProject !== draftId &&
+              options?.retainWhenUnmapped === true &&
+              previousDraftThread &&
+              !isDraftThreadPromoting(previousDraftThread) &&
+              !composerDraftHasUserContent(
+                state.draftsByThreadKey[previousThreadKeyForLogicalProject],
+              ) &&
+              previousDraftThread.retainWhenUnmapped !== true
+            ) {
+              // A forced independent draft replaces the project mapping, but
+              // the old empty session may still belong to that surface (for
+              // example, a Harness graph node). Mark it before it becomes
+              // unmapped so persistence and later remaps keep it alive.
+              nextDraftThreadsByThreadKey[previousThreadKeyForLogicalProject] = {
+                ...previousDraftThread,
+                retainWhenUnmapped: true,
+              };
             }
             return {
               draftsByThreadKey: nextDraftsByThreadKey,
@@ -2791,6 +2828,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 options.envMode ?? (nextWorktreePath ? "worktree" : (existing.envMode ?? "local")),
               startFromOrigin: nextStartFromOrigin,
               promotedTo: existing.promotedTo ?? null,
+              retainWhenUnmapped: existing.retainWhenUnmapped ?? false,
             };
             const isUnchanged =
               nextDraftThread.environmentId === existing.environmentId &&

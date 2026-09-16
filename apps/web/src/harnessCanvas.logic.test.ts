@@ -90,18 +90,14 @@ describe("harness canvas graph logic", () => {
         rowHeight: 160,
         edges: [
           {
-            id: "delegates-a",
             source: "parent",
             target: "child-a",
             kind: "delegation",
-            channelId: null,
           },
           {
-            id: "delegates-b",
             source: "parent",
             target: "child-b",
             kind: "delegation",
-            channelId: null,
           },
         ],
       },
@@ -123,18 +119,14 @@ describe("harness canvas graph logic", () => {
         rowHeight: 160,
         edges: [
           {
-            id: "delegates-saved",
             source: "parent",
             target: "saved-child",
             kind: "delegation",
-            channelId: null,
           },
           {
-            id: "delegates-new",
             source: "parent",
             target: "new-child",
             kind: "delegation",
-            channelId: null,
           },
         ],
       },

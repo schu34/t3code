@@ -271,6 +271,25 @@ import {
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
+import {
+  HarnessAcknowledgeCoordinationInput,
+  HarnessAgent,
+  HarnessChannel,
+  HarnessGetChannelInput,
+  HarnessGraphError,
+  HarnessGraphReadInput,
+  HarnessGraphSnapshot,
+  HarnessGraphStreamEvent,
+  HarnessListDeliveriesInput,
+  HarnessListDeliveriesResult,
+  HarnessOpenChannelInput,
+  HarnessRegisterAgentInput,
+  HarnessSendCoordinationMessageInput,
+  HarnessSetChannelStatusInput,
+  HarnessUpdateCanvasInput,
+  HarnessUpdateDeliveryInput,
+  HarnessUpsertRelationshipInput,
+} from "./harnessGraph.ts";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -440,6 +459,20 @@ export const WS_METHODS = {
   subscribeAuthAccess: "subscribeAuthAccess",
   subscribeBackgroundPolicy: "subscribeBackgroundPolicy",
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
+
+  // Harness graph and coordination methods
+  harnessGraphRead: "harnessGraph.read",
+  harnessGraphSubscribe: "harnessGraph.subscribe",
+  harnessGraphGetChannel: "harnessGraph.getChannel",
+  harnessGraphRegisterAgent: "harnessGraph.registerAgent",
+  harnessGraphUpdateCanvas: "harnessGraph.updateCanvas",
+  harnessGraphUpsertRelationship: "harnessGraph.upsertRelationship",
+  harnessGraphOpenChannel: "harnessGraph.openChannel",
+  harnessGraphSendCoordination: "harnessGraph.sendCoordination",
+  harnessGraphAcknowledgeCoordination: "harnessGraph.acknowledgeCoordination",
+  harnessGraphSetChannelStatus: "harnessGraph.setChannelStatus",
+  harnessGraphUpdateDelivery: "harnessGraph.updateDelivery",
+  harnessGraphListDeliveries: "harnessGraph.listDeliveries",
 } as const;
 
 const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -1381,6 +1414,82 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
   stream: true,
 });
 
+const WsHarnessGraphReadRpc = Rpc.make(WS_METHODS.harnessGraphRead, {
+  payload: HarnessGraphReadInput,
+  success: HarnessGraphSnapshot,
+  error: HarnessGraphError,
+});
+
+const WsHarnessGraphSubscribeRpc = Rpc.make(WS_METHODS.harnessGraphSubscribe, {
+  payload: HarnessGraphReadInput,
+  success: HarnessGraphStreamEvent,
+  error: HarnessGraphError,
+  stream: true,
+});
+
+const WsHarnessGraphGetChannelRpc = Rpc.make(WS_METHODS.harnessGraphGetChannel, {
+  payload: HarnessGetChannelInput,
+  success: HarnessChannel,
+  error: HarnessGraphError,
+});
+
+const WsHarnessGraphRegisterAgentRpc = Rpc.make(WS_METHODS.harnessGraphRegisterAgent, {
+  payload: HarnessRegisterAgentInput,
+  success: HarnessAgent,
+  error: HarnessGraphError,
+});
+
+const WsHarnessGraphUpdateCanvasRpc = Rpc.make(WS_METHODS.harnessGraphUpdateCanvas, {
+  payload: HarnessUpdateCanvasInput,
+  success: HarnessGraphSnapshot,
+  error: HarnessGraphError,
+});
+
+const WsHarnessGraphUpsertRelationshipRpc = Rpc.make(WS_METHODS.harnessGraphUpsertRelationship, {
+  payload: HarnessUpsertRelationshipInput,
+  success: HarnessGraphSnapshot,
+  error: HarnessGraphError,
+});
+
+const WsHarnessGraphOpenChannelRpc = Rpc.make(WS_METHODS.harnessGraphOpenChannel, {
+  payload: HarnessOpenChannelInput,
+  success: HarnessGraphSnapshot,
+  error: HarnessGraphError,
+});
+
+const WsHarnessGraphSendCoordinationRpc = Rpc.make(WS_METHODS.harnessGraphSendCoordination, {
+  payload: HarnessSendCoordinationMessageInput,
+  success: HarnessGraphSnapshot,
+  error: HarnessGraphError,
+});
+
+const WsHarnessGraphAcknowledgeCoordinationRpc = Rpc.make(
+  WS_METHODS.harnessGraphAcknowledgeCoordination,
+  {
+    payload: HarnessAcknowledgeCoordinationInput,
+    success: HarnessGraphSnapshot,
+    error: HarnessGraphError,
+  },
+);
+
+const WsHarnessGraphSetChannelStatusRpc = Rpc.make(WS_METHODS.harnessGraphSetChannelStatus, {
+  payload: HarnessSetChannelStatusInput,
+  success: HarnessGraphSnapshot,
+  error: HarnessGraphError,
+});
+
+const WsHarnessGraphUpdateDeliveryRpc = Rpc.make(WS_METHODS.harnessGraphUpdateDelivery, {
+  payload: HarnessUpdateDeliveryInput,
+  success: HarnessGraphSnapshot,
+  error: HarnessGraphError,
+});
+
+const WsHarnessGraphListDeliveriesRpc = Rpc.make(WS_METHODS.harnessGraphListDeliveries, {
+  payload: HarnessListDeliveriesInput,
+  success: HarnessListDeliveriesResult,
+  error: HarnessGraphError,
+});
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
@@ -1517,6 +1626,18 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeAuthAccessRpc,
   WsSubscribeBackgroundPolicyRpc,
   WsSubscribeResourceTelemetryRpc,
+  WsHarnessGraphReadRpc,
+  WsHarnessGraphSubscribeRpc,
+  WsHarnessGraphGetChannelRpc,
+  WsHarnessGraphRegisterAgentRpc,
+  WsHarnessGraphUpdateCanvasRpc,
+  WsHarnessGraphUpsertRelationshipRpc,
+  WsHarnessGraphOpenChannelRpc,
+  WsHarnessGraphSendCoordinationRpc,
+  WsHarnessGraphAcknowledgeCoordinationRpc,
+  WsHarnessGraphSetChannelStatusRpc,
+  WsHarnessGraphUpdateDeliveryRpc,
+  WsHarnessGraphListDeliveriesRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetWorkflowScriptRpc,
   WsOrchestrationGetTurnDiffRpc,

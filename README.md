@@ -1,6 +1,8 @@
 # Harness
 
-Harness is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code)), [web app](https://app.t3.codes) and [Electron-based desktop app](https://t3.codes).
+Harness is a local fork of [T3 Code](https://github.com/pingdotgg/t3code), an "agent harness control surface" for the agents on your machine.
+
+This fork is pinned to upstream commit `9a49d6d5a656254d7079d463aa6ead5d62f4a3e6`. Harness keeps the upstream MIT license and package internals while using its own desktop identity and data directory.
 
 Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCode, and Google Antigravity. If they're set up on your computer, Harness can control them.
 
@@ -9,6 +11,33 @@ Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCod
 Nothing. We built Harness because we wanted the best possible development experience with agents. We were inspired by existing solutions like the Codex desktop app, Conductor, Claude Desktop and Cursor Glass, but none met our bar.
 
 We wanted something performant, remote-ready, and truly open. If we ever go the wrong direction, we want you to have everything you need to fork and build the editor that you want.
+
+## Local development
+
+Install dependencies with `vp i`, then start the web and server surfaces with:
+
+```bash
+vp run dev
+```
+
+Harness stores standalone and worktree development state under `.harness` (or `~/.harness` outside a worktree). Set `T3CODE_HOME` or pass `--home-dir`/`--base-dir` when you need a different location.
+
+## Agent canvas
+
+The chat landing page is a persistent graph of the threads in the selected environment.
+
+```mermaid
+flowchart LR
+  root[Root agent] -->|delegates| child[Child agent]
+  root -.->|side chat| branch[Side chat]
+  child ==>|coordination channel| peer[Related agent]
+```
+
+Each node opens the existing full chat surface and shows execution and delivery separately (for example, **Working** plus **In review**). Dragging between nodes creates a durable relationship and coordination channel. Channel state, decisions, revisions, and retryable outbox/inbox deliveries are stored in SQLite; an agent can acknowledge a revision to mark the channel aligned. Convergence is bounded to three rounds so a disagreement becomes visible as an actionable limit instead of an endless agent loop.
+
+The first slice is Codex-first and local: child agents and side chats are durable graph agents backed by Harness thread IDs; a new draft remains in the local draft store until its first turn is sent. The graph service owns relationships and synchronization metadata. Provider adapters and automatic worktree orchestration can be added behind the same graph RPCs.
+
+See [the canvas design](./docs/harness-canvas.md) for the interaction wireframe, persistence model, and next-slice boundaries.
 
 ## Installation
 

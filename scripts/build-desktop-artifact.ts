@@ -55,6 +55,10 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
 const DESKTOP_APP_ID = "dev.harness.app";
+// Harness builds are a fork and must never publish or consume the upstream
+// T3 Code release feed. A generic mock feed remains available for local build
+// smoke tests when explicitly requested.
+const DESKTOP_UPSTREAM_UPDATES_ENABLED = false;
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
@@ -2670,7 +2674,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   const updateChannel = resolveDesktopUpdateChannel(version);
   if (!isDesktopPreviewVersion(version)) {
     const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
-    if (publishConfig) {
+    if (DESKTOP_UPSTREAM_UPDATES_ENABLED && publishConfig) {
       buildConfig.publish = [publishConfig];
     } else if (mockUpdates) {
       buildConfig.publish = [

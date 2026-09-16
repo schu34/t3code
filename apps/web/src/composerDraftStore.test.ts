@@ -1460,6 +1460,38 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(draftByKey(draftId)).toBeUndefined();
   });
 
+  it("retains forced empty drafts when remapping a project", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+
+    store.setProjectDraftThreadId(projectRef, otherDraftId, {
+      threadId: otherThreadId,
+      retainWhenUnmapped: true,
+    });
+
+    expect(useComposerDraftStore.getState().getDraftThreadByProjectRef(projectRef)?.draftId).toBe(
+      otherDraftId,
+    );
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)).toMatchObject({
+      threadId,
+      retainWhenUnmapped: true,
+    });
+    expect(useComposerDraftStore.getState().getDraftThread(otherDraftId)).toMatchObject({
+      threadId: otherThreadId,
+      retainWhenUnmapped: true,
+    });
+
+    const persisted = partializeComposerDraftStoreState(useComposerDraftStore.getState());
+    expect(persisted.draftThreadsByThreadKey[draftId]).toMatchObject({
+      threadId,
+      retainWhenUnmapped: true,
+    });
+    expect(persisted.draftThreadsByThreadKey[otherDraftId]).toMatchObject({
+      threadId: otherThreadId,
+      retainWhenUnmapped: true,
+    });
+  });
+
   it("keeps invested composer drafts alive unmapped when remapping a project to a new draft thread", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectRef, draftId, { threadId });
@@ -2763,6 +2795,36 @@ function createMockStorage() {
 }
 
 describe("composer draft persistence", () => {
+  it("round trips retained empty draft sessions", async () => {
+    await useComposerDraftStore.persist.clearStorage();
+    vi.useFakeTimers();
+    try {
+      resetComposerDraftStore();
+      const projectId = ProjectId.make("project-retained-persistence");
+      const projectRef = scopeProjectRef(TEST_ENVIRONMENT_ID, projectId);
+      const draftId = DraftId.make("draft-retained-persistence");
+      const threadId = ThreadId.make("thread-retained-persistence");
+
+      useComposerDraftStore.getState().setProjectDraftThreadId(projectRef, draftId, {
+        threadId,
+        retainWhenUnmapped: true,
+      });
+      await vi.advanceTimersByTimeAsync(300);
+
+      resetComposerDraftStore();
+      await useComposerDraftStore.persist.rehydrate();
+
+      expect(useComposerDraftStore.getState().getDraftThread(draftId)).toMatchObject({
+        threadId,
+        retainWhenUnmapped: true,
+      });
+    } finally {
+      await useComposerDraftStore.persist.clearStorage();
+      vi.useRealTimers();
+      resetComposerDraftStore();
+    }
+  });
+
   it("defers attachment reads and serialization until typing stops, then restores the last draft", async () => {
     await useComposerDraftStore.persist.clearStorage();
     vi.useFakeTimers();

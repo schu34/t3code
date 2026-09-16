@@ -351,14 +351,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
       assert.notProperty(preview, "publish");
       assert.notProperty(previewChannel, "publish");
-      assert.deepStrictEqual(release.publish, [
-        {
-          provider: "github",
-          owner: "pingdotgg",
-          repo: "t3code",
-          releaseType: "release",
-        },
-      ]);
+      assert.notProperty(release, "publish");
     }).pipe(
       Effect.provide(
         ConfigProvider.layer(
