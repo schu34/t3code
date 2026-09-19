@@ -2,7 +2,7 @@
 
 Harness is a local fork of [T3 Code](https://github.com/pingdotgg/t3code), an "agent harness control surface" for the agents on your machine.
 
-This fork is pinned to upstream commit `9a49d6d5a656254d7079d463aa6ead5d62f4a3e6`. Harness keeps the upstream MIT license and package internals while using its own desktop identity and data directory.
+This fork is based on upstream commit `b44c1ce5d25ee0d5a5be82e380618a886c19ea96`. Harness keeps the upstream MIT license and package internals while using its own desktop identity and data directory.
 
 Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCode, and Google Antigravity. If they're set up on your computer, Harness can control them.
 
