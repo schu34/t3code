@@ -13,6 +13,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
+import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
@@ -69,6 +70,7 @@ import {
   RpcClientId,
   EnvironmentAuthorizationError,
   ThreadId,
+  TurnId,
   type TerminalAttachStreamEvent,
   type TerminalError,
   type TerminalEvent,
@@ -79,6 +81,16 @@ import {
   WORKTREE_SETUP_ACTIVITY_KIND,
   worktreeSetupActivityId,
   type WorktreeSetupSnapshot,
+  HarnessAgentId,
+  HarnessChannelId,
+  HarnessCoordinationMessageId,
+  HarnessDeliveryId,
+  HarnessGraphConvergenceLimitError,
+  type HarnessGraphError,
+  HarnessGraphPersistenceError,
+  HarnessGraphValidationError,
+  HarnessRelationshipId,
+  HARNESS_GRAPH_MAX_CONVERGENCE_ROUNDS,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
@@ -496,6 +508,7 @@ const makeWsRpcLayer = (
   clientOrigin: OrchestrationClientOrigin,
   clientAnalyticsProps: Readonly<Record<string, unknown>>,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
+  harnessGraphChanges: PubSub.PubSub<void>,
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -1829,6 +1842,438 @@ const makeWsRpcLayer = (
         vcsStatusBroadcaster
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
+
+      // Harness keeps graph and coordination state in its own durable tables. The
+      // helpers below intentionally live beside the RPC layer for the first slice:
+      // they share the same authenticated SQL connection and can be moved behind a
+      // service once the graph protocol stabilizes.
+      type HarnessAgentRow = {
+        readonly agent_id: string;
+        readonly thread_id: string;
+        readonly project_id: string;
+        readonly display_name: string;
+        readonly role: "root" | "delegated" | "sidechat";
+        readonly status: "active" | "paused" | "completed" | "failed";
+        readonly parent_agent_id: string | null;
+        readonly canvas_x: number;
+        readonly canvas_y: number;
+        readonly canvas_collapsed: number;
+        readonly created_at: string;
+        readonly updated_at: string;
+      };
+      type HarnessRelationshipRow = {
+        readonly relationship_id: string;
+        readonly source_agent_id: string;
+        readonly target_agent_id: string;
+        readonly kind: "delegation" | "sidechat";
+        readonly topic: string | null;
+        readonly forked_from_turn_id: string | null;
+        readonly created_at: string;
+      };
+      type HarnessChannelRow = {
+        readonly channel_id: string;
+        readonly agent_a_id: string;
+        readonly agent_b_id: string;
+        readonly topic: string;
+        readonly status: "syncing" | "aligned" | "needs-attention" | "paused";
+        readonly summary: string | null;
+        readonly decisions_json: string;
+        readonly revision_a: number;
+        readonly revision_b: number;
+        readonly acknowledged_revision_a: number;
+        readonly acknowledged_revision_b: number;
+        readonly convergence_round: number;
+        readonly created_at: string;
+        readonly updated_at: string;
+      };
+      type HarnessMessageRow = {
+        readonly message_id: string;
+        readonly channel_id: string;
+        readonly sender_agent_id: string;
+        readonly recipient_agent_id: string;
+        readonly author_kind: "user" | "agent";
+        readonly message_kind: "update" | "question" | "agreement" | "decision" | "test-result";
+        readonly topic: string;
+        readonly body: string;
+        readonly summary: string | null;
+        readonly decisions_json: string;
+        readonly revision: number;
+        readonly round: 1 | 2 | 3;
+        readonly deduplication_key: string;
+        readonly created_at: string;
+      };
+      type HarnessDeliveryRow = {
+        readonly delivery_id: string;
+        readonly message_id: string;
+        readonly channel_id: string;
+        readonly sender_agent_id: string;
+        readonly recipient_agent_id: string;
+        readonly side: "outbox" | "inbox";
+        readonly state: "pending" | "delivered" | "acknowledged" | "failed";
+        readonly attempt_count: number;
+        readonly last_error: string | null;
+        readonly created_at: string;
+        readonly updated_at: string;
+      };
+
+      const harnessPersistence = <A, E, R>(operation: string, effect: Effect.Effect<A, E, R>) =>
+        effect.pipe(
+          Effect.mapError(
+            () =>
+              new HarnessGraphPersistenceError({
+                operation,
+              }),
+          ),
+        );
+      const harnessValidation = (operation: string, detail: string) =>
+        Effect.fail(new HarnessGraphValidationError({ operation, detail }));
+      const isHarnessGraphError = (error: unknown): error is HarnessGraphError => {
+        if (typeof error !== "object" || error === null || !("_tag" in error)) return false;
+        const tag = (error as { readonly _tag?: unknown })._tag;
+        return (
+          tag === "HarnessGraphValidationError" ||
+          tag === "HarnessGraphConvergenceLimitError" ||
+          tag === "HarnessGraphPersistenceError"
+        );
+      };
+      const observeHarnessRpcEffect = <A, E, R>(
+        method: string,
+        effect: Effect.Effect<A, E, R>,
+        attributes: Readonly<Record<string, unknown>>,
+      ) =>
+        observeRpcEffect(
+          method,
+          effect.pipe(
+            Effect.mapError((error) =>
+              isHarnessGraphError(error)
+                ? error
+                : new HarnessGraphPersistenceError({ operation: method }),
+            ),
+          ),
+          attributes,
+        ) as unknown as Effect.Effect<A, HarnessGraphError, never>;
+      const observeHarnessRpcStreamEffect = <A, E, R>(
+        method: string,
+        effect: Effect.Effect<Stream.Stream<A, E, R>, E, R>,
+        attributes: Readonly<Record<string, unknown>>,
+      ) =>
+        observeRpcStreamEffect(
+          method,
+          effect.pipe(
+            Effect.mapError((error) =>
+              isHarnessGraphError(error)
+                ? error
+                : new HarnessGraphPersistenceError({ operation: method }),
+            ),
+          ),
+          attributes,
+        ) as unknown as Stream.Stream<A, HarnessGraphError, never>;
+      const parseDecisions = (value: string): ReadonlyArray<string> => {
+        try {
+          const parsed: unknown = JSON.parse(value);
+          return Array.isArray(parsed) && parsed.every((item) => typeof item === "string")
+            ? parsed
+            : [];
+        } catch {
+          return [];
+        }
+      };
+      const nullable = (value: string | null): { readonly summary?: string } =>
+        value === null ? {} : { summary: value };
+      const makeHarnessAgent = (row: HarnessAgentRow) => ({
+        agentId: HarnessAgentId.make(row.agent_id),
+        threadId: ThreadId.make(row.thread_id),
+        projectId: ProjectId.make(row.project_id),
+        displayName: row.display_name,
+        role: row.role,
+        status: row.status,
+        ...(row.parent_agent_id === null
+          ? {}
+          : { parentAgentId: HarnessAgentId.make(row.parent_agent_id) }),
+        canvas: {
+          x: Number(row.canvas_x),
+          y: Number(row.canvas_y),
+          collapsed: Number(row.canvas_collapsed) !== 0,
+        },
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      });
+      const makeHarnessRelationship = (row: HarnessRelationshipRow) => ({
+        relationshipId: HarnessRelationshipId.make(row.relationship_id),
+        sourceAgentId: HarnessAgentId.make(row.source_agent_id),
+        targetAgentId: HarnessAgentId.make(row.target_agent_id),
+        kind: row.kind,
+        ...(row.topic === null ? {} : { topic: row.topic }),
+        ...(row.forked_from_turn_id === null
+          ? {}
+          : { forkedFromTurnId: TurnId.make(row.forked_from_turn_id) }),
+        createdAt: row.created_at,
+      });
+      const makeHarnessMessage = (row: HarnessMessageRow) => ({
+        messageId: HarnessCoordinationMessageId.make(row.message_id),
+        channelId: HarnessChannelId.make(row.channel_id),
+        senderAgentId: HarnessAgentId.make(row.sender_agent_id),
+        recipientAgentId: HarnessAgentId.make(row.recipient_agent_id),
+        authorKind: row.author_kind,
+        kind: row.message_kind,
+        topic: row.topic,
+        body: row.body,
+        ...nullable(row.summary),
+        decisions: parseDecisions(row.decisions_json),
+        revision: Number(row.revision),
+        round: row.round,
+        deduplicationKey: row.deduplication_key,
+        createdAt: row.created_at,
+      });
+      const makeHarnessDelivery = (row: HarnessDeliveryRow) => ({
+        deliveryId: HarnessDeliveryId.make(row.delivery_id),
+        messageId: HarnessCoordinationMessageId.make(row.message_id),
+        channelId: HarnessChannelId.make(row.channel_id),
+        senderAgentId: HarnessAgentId.make(row.sender_agent_id),
+        recipientAgentId: HarnessAgentId.make(row.recipient_agent_id),
+        side: row.side,
+        state: row.state,
+        attemptCount: Number(row.attempt_count),
+        ...(row.last_error === null ? {} : { lastError: row.last_error }),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      });
+      const makeHarnessChannelSummary = (
+        row: HarnessChannelRow & {
+          readonly message_count: number;
+          readonly pending_outbox_count: number;
+          readonly pending_inbox_count: number;
+        },
+      ) => ({
+        channelId: HarnessChannelId.make(row.channel_id),
+        agentAId: HarnessAgentId.make(row.agent_a_id),
+        agentBId: HarnessAgentId.make(row.agent_b_id),
+        topic: row.topic,
+        status: row.status,
+        ...nullable(row.summary),
+        decisions: parseDecisions(row.decisions_json),
+        revisionA: Number(row.revision_a),
+        revisionB: Number(row.revision_b),
+        acknowledgedRevisionA: Number(row.acknowledged_revision_a),
+        acknowledgedRevisionB: Number(row.acknowledged_revision_b),
+        convergenceRound: Number(row.convergence_round),
+        messageCount: Number(row.message_count),
+        pendingOutboxCount: Number(row.pending_outbox_count),
+        pendingInboxCount: Number(row.pending_inbox_count),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      });
+      const bumpHarnessRevision = harnessPersistence(
+        "bump-revision",
+        Effect.gen(function* () {
+          yield* sql`
+            UPDATE harness_graph_meta
+            SET value = CAST(value AS INTEGER) + 1
+            WHERE key = 'revision'
+          `;
+          const rows = yield* sql<{ readonly value: string }>`
+            SELECT value FROM harness_graph_meta WHERE key = 'revision'
+          `;
+          return Number(rows[0]?.value ?? 0);
+        }),
+      );
+      const publishHarnessGraphChange = PubSub.publish(harnessGraphChanges, undefined);
+      const requireHarnessAgent = (agentId: HarnessAgentId) =>
+        harnessPersistence(
+          "load-agent",
+          sql<HarnessAgentRow>`
+            SELECT agent_id, thread_id, project_id, display_name, role, status,
+                   parent_agent_id, canvas_x, canvas_y, canvas_collapsed,
+                   created_at, updated_at
+            FROM harness_agents WHERE agent_id = ${agentId}
+          `,
+        ).pipe(
+          Effect.flatMap((rows) =>
+            rows[0] === undefined
+              ? harnessValidation("load-agent", `Agent '${agentId}' does not exist.`)
+              : Effect.succeed(rows[0]),
+          ),
+        );
+      const requireHarnessChannel = (channelId: HarnessChannelId) =>
+        harnessPersistence(
+          "load-channel",
+          sql<HarnessChannelRow>`
+            SELECT channel_id, agent_a_id, agent_b_id, topic, status, summary,
+                   decisions_json, revision_a, revision_b, acknowledged_revision_a,
+                   acknowledged_revision_b, convergence_round, created_at, updated_at
+            FROM harness_channels WHERE channel_id = ${channelId}
+          `,
+        ).pipe(
+          Effect.flatMap((rows) =>
+            rows[0] === undefined
+              ? harnessValidation("load-channel", `Channel '${channelId}' does not exist.`)
+              : Effect.succeed(rows[0]),
+          ),
+        );
+      const ensureHarnessAgents = harnessPersistence(
+        "sync-agents",
+        Effect.gen(function* () {
+          const shell = yield* projectionSnapshotQuery.getShellSnapshot();
+          const archivedShell = yield* projectionSnapshotQuery.getArchivedShellSnapshot();
+          const threads = [...shell.threads, ...archivedShell.threads];
+          const existingRows = yield* sql<{
+            readonly agent_id: string;
+            readonly thread_id: string;
+          }>`
+            SELECT agent_id, thread_id FROM harness_agents
+          `;
+          const existingAgentIds = new Set(existingRows.map((row) => row.agent_id));
+          const existingThreadIds = new Set(existingRows.map((row) => row.thread_id));
+          let changed = false;
+          let insertionIndex = existingRows.length;
+          for (const thread of threads) {
+            if (existingAgentIds.has(thread.id) || existingThreadIds.has(thread.id)) continue;
+            const createdAt = yield* nowIso;
+            const column = insertionIndex % 4;
+            const row = Math.floor(insertionIndex / 4);
+            yield* sql`
+              INSERT OR IGNORE INTO harness_agents (
+                agent_id, thread_id, project_id, display_name, role, status,
+                canvas_x, canvas_y, canvas_collapsed, created_at, updated_at
+              ) VALUES (
+                ${thread.id}, ${thread.id}, ${thread.projectId}, ${thread.title},
+                'root', ${thread.settledOverride === "settled" || thread.archivedAt !== null ? "completed" : "active"},
+                ${80 + column * 300}, ${80 + row * 190}, 0, ${createdAt}, ${createdAt}
+              )
+            `;
+            existingAgentIds.add(thread.id);
+            existingThreadIds.add(thread.id);
+            insertionIndex += 1;
+            changed = true;
+          }
+          if (changed) {
+            yield* sql`
+              UPDATE harness_graph_meta
+              SET value = CAST(value AS INTEGER) + 1
+              WHERE key = 'revision'
+            `;
+            yield* publishHarnessGraphChange;
+          }
+        }),
+      );
+      const readHarnessSnapshot = (input: { readonly projectId?: ProjectId | undefined } = {}) =>
+        harnessPersistence(
+          "read-snapshot",
+          Effect.gen(function* () {
+            yield* ensureHarnessAgents;
+            const revisionRows = yield* sql<{ readonly value: string }>`
+              SELECT value FROM harness_graph_meta WHERE key = 'revision'
+            `;
+            const agents =
+              input.projectId === undefined
+                ? yield* sql<HarnessAgentRow>`
+                    SELECT agent_id, thread_id, project_id, display_name, role, status,
+                           parent_agent_id, canvas_x, canvas_y, canvas_collapsed,
+                           created_at, updated_at
+                    FROM harness_agents ORDER BY created_at, agent_id
+                  `
+                : yield* sql<HarnessAgentRow>`
+                    SELECT agent_id, thread_id, project_id, display_name, role, status,
+                           parent_agent_id, canvas_x, canvas_y, canvas_collapsed,
+                           created_at, updated_at
+                    FROM harness_agents WHERE project_id = ${input.projectId}
+                    ORDER BY created_at, agent_id
+                  `;
+            const relationships =
+              input.projectId === undefined
+                ? yield* sql<HarnessRelationshipRow>`
+                    SELECT relationship_id, source_agent_id, target_agent_id, kind, topic,
+                           forked_from_turn_id, created_at
+                    FROM harness_relationships ORDER BY created_at, relationship_id
+                  `
+                : yield* sql<HarnessRelationshipRow>`
+                    SELECT r.relationship_id, r.source_agent_id, r.target_agent_id, r.kind,
+                           r.topic, r.forked_from_turn_id, r.created_at
+                    FROM harness_relationships r
+                    JOIN harness_agents a ON a.agent_id = r.source_agent_id
+                    WHERE a.project_id = ${input.projectId}
+                    ORDER BY r.created_at, r.relationship_id
+                  `;
+            const channels =
+              input.projectId === undefined
+                ? yield* sql<
+                    HarnessChannelRow & {
+                      readonly message_count: number;
+                      readonly pending_outbox_count: number;
+                      readonly pending_inbox_count: number;
+                    }
+                  >`
+                    SELECT c.*,
+                      (SELECT COUNT(*) FROM harness_coordination_messages m WHERE m.channel_id = c.channel_id) AS message_count,
+                      (SELECT COUNT(*) FROM harness_deliveries d WHERE d.channel_id = c.channel_id AND d.side = 'outbox' AND d.state = 'pending') AS pending_outbox_count,
+                      (SELECT COUNT(*) FROM harness_deliveries d WHERE d.channel_id = c.channel_id AND d.side = 'inbox' AND d.state = 'pending') AS pending_inbox_count
+                    FROM harness_channels c ORDER BY c.updated_at, c.channel_id
+                  `
+                : yield* sql<
+                    HarnessChannelRow & {
+                      readonly message_count: number;
+                      readonly pending_outbox_count: number;
+                      readonly pending_inbox_count: number;
+                    }
+                  >`
+                    SELECT c.*,
+                      (SELECT COUNT(*) FROM harness_coordination_messages m WHERE m.channel_id = c.channel_id) AS message_count,
+                      (SELECT COUNT(*) FROM harness_deliveries d WHERE d.channel_id = c.channel_id AND d.side = 'outbox' AND d.state = 'pending') AS pending_outbox_count,
+                      (SELECT COUNT(*) FROM harness_deliveries d WHERE d.channel_id = c.channel_id AND d.side = 'inbox' AND d.state = 'pending') AS pending_inbox_count
+                    FROM harness_channels c
+                    JOIN harness_agents a ON a.agent_id = c.agent_a_id
+                    WHERE a.project_id = ${input.projectId}
+                    ORDER BY c.updated_at, c.channel_id
+                  `;
+            return {
+              revision: Number(revisionRows[0]?.value ?? 0),
+              agents: agents.map(makeHarnessAgent),
+              relationships: relationships.map(makeHarnessRelationship),
+              channels: channels.map(makeHarnessChannelSummary),
+            };
+          }),
+        );
+      const readHarnessChannel = (channel: HarnessChannelRow) =>
+        harnessPersistence(
+          "read-channel",
+          Effect.gen(function* () {
+            const messages = yield* sql<HarnessMessageRow>`
+              SELECT message_id, channel_id, sender_agent_id, recipient_agent_id,
+                     author_kind, message_kind, topic, body, summary, decisions_json,
+                     revision, round, deduplication_key, created_at
+              FROM harness_coordination_messages
+              WHERE channel_id = ${channel.channel_id}
+              ORDER BY created_at, message_id
+            `;
+            const deliveries = yield* sql<HarnessDeliveryRow>`
+              SELECT delivery_id, message_id, channel_id, sender_agent_id,
+                     recipient_agent_id, side, state, attempt_count, last_error,
+                     created_at, updated_at
+              FROM harness_deliveries
+              WHERE channel_id = ${channel.channel_id}
+              ORDER BY created_at, delivery_id
+            `;
+            return {
+              channelId: HarnessChannelId.make(channel.channel_id),
+              agentAId: HarnessAgentId.make(channel.agent_a_id),
+              agentBId: HarnessAgentId.make(channel.agent_b_id),
+              topic: channel.topic,
+              status: channel.status,
+              ...nullable(channel.summary),
+              decisions: parseDecisions(channel.decisions_json),
+              revisionA: Number(channel.revision_a),
+              revisionB: Number(channel.revision_b),
+              acknowledgedRevisionA: Number(channel.acknowledged_revision_a),
+              acknowledgedRevisionB: Number(channel.acknowledged_revision_b),
+              convergenceRound: Number(channel.convergence_round),
+              messages: messages.map(makeHarnessMessage),
+              outbox: deliveries.filter((row) => row.side === "outbox").map(makeHarnessDelivery),
+              inbox: deliveries.filter((row) => row.side === "inbox").map(makeHarnessDelivery),
+              createdAt: channel.created_at,
+              updatedAt: channel.updated_at,
+            };
+          }),
+        );
 
       return WsRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
@@ -3692,6 +4137,461 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "server" },
           ),
+        [WS_METHODS.harnessGraphRead]: (input) =>
+          observeHarnessRpcEffect(WS_METHODS.harnessGraphRead, readHarnessSnapshot(input), {
+            "rpc.aggregate": "harness",
+          }),
+        [WS_METHODS.harnessGraphSubscribe]: (input) =>
+          observeHarnessRpcStreamEffect(
+            WS_METHODS.harnessGraphSubscribe,
+            Effect.gen(function* () {
+              const subscription = yield* PubSub.subscribe(harnessGraphChanges);
+              const initial = yield* readHarnessSnapshot(input);
+              const changes = Stream.fromSubscription(subscription).pipe(
+                Stream.mapEffect(() =>
+                  readHarnessSnapshot(input).pipe(
+                    Effect.map((snapshot) => ({ kind: "changed" as const, snapshot })),
+                  ),
+                ),
+              );
+              return Stream.concat(
+                Stream.make({ kind: "snapshot" as const, snapshot: initial }),
+                changes,
+              );
+            }),
+            { "rpc.aggregate": "harness" },
+          ),
+        [WS_METHODS.harnessGraphGetChannel]: (input) =>
+          observeHarnessRpcEffect(
+            WS_METHODS.harnessGraphGetChannel,
+            Effect.gen(function* () {
+              const channel = yield* requireHarnessChannel(input.channelId);
+              return yield* readHarnessChannel(channel);
+            }),
+            { "rpc.aggregate": "harness" },
+          ),
+        [WS_METHODS.harnessGraphRegisterAgent]: (input) =>
+          observeHarnessRpcEffect(
+            WS_METHODS.harnessGraphRegisterAgent,
+            Effect.gen(function* () {
+              if (input.parentAgentId !== undefined)
+                yield* requireHarnessAgent(input.parentAgentId);
+              const createdAt = yield* nowIso;
+              const canvas = input.canvas ?? { x: 0, y: 0, collapsed: false };
+              yield* harnessPersistence(
+                "register-agent",
+                sql`
+                  INSERT INTO harness_agents (
+                    agent_id, thread_id, project_id, display_name, role, status,
+                    parent_agent_id, canvas_x, canvas_y, canvas_collapsed, created_at, updated_at
+                  ) VALUES (
+                    ${input.agentId}, ${input.threadId}, ${input.projectId}, ${input.displayName},
+                    ${input.role}, ${input.status ?? "active"}, ${input.parentAgentId ?? null},
+                    ${canvas.x}, ${canvas.y}, ${canvas.collapsed ? 1 : 0}, ${createdAt}, ${createdAt}
+                  )
+                  ON CONFLICT (agent_id) DO UPDATE SET
+                    thread_id = excluded.thread_id,
+                    project_id = excluded.project_id,
+                    display_name = excluded.display_name,
+                    role = excluded.role,
+                    status = excluded.status,
+                    parent_agent_id = excluded.parent_agent_id,
+                    updated_at = excluded.updated_at
+                `,
+              );
+              yield* bumpHarnessRevision;
+              yield* publishHarnessGraphChange;
+              return makeHarnessAgent(yield* requireHarnessAgent(input.agentId));
+            }),
+            { "rpc.aggregate": "harness" },
+          ),
+        [WS_METHODS.harnessGraphUpdateCanvas]: (input) =>
+          observeHarnessRpcEffect(
+            WS_METHODS.harnessGraphUpdateCanvas,
+            Effect.gen(function* () {
+              yield* requireHarnessAgent(input.agentId);
+              const updatedAt = yield* nowIso;
+              yield* harnessPersistence(
+                "update-canvas",
+                sql`
+                  UPDATE harness_agents
+                  SET canvas_x = ${input.x}, canvas_y = ${input.y},
+                      canvas_collapsed = ${input.collapsed ? 1 : 0}, updated_at = ${updatedAt}
+                  WHERE agent_id = ${input.agentId}
+                `,
+              );
+              yield* bumpHarnessRevision;
+              yield* publishHarnessGraphChange;
+              return yield* readHarnessSnapshot();
+            }),
+            { "rpc.aggregate": "harness" },
+          ),
+        [WS_METHODS.harnessGraphUpsertRelationship]: (input) =>
+          observeHarnessRpcEffect(
+            WS_METHODS.harnessGraphUpsertRelationship,
+            Effect.gen(function* () {
+              if (input.sourceAgentId === input.targetAgentId) {
+                return yield* harnessValidation(
+                  "upsert-relationship",
+                  "An agent cannot connect to itself.",
+                );
+              }
+              yield* requireHarnessAgent(input.sourceAgentId);
+              yield* requireHarnessAgent(input.targetAgentId);
+              const relationshipId =
+                input.relationshipId ?? HarnessRelationshipId.make(yield* crypto.randomUUIDv4);
+              const createdAt = yield* nowIso;
+              yield* harnessPersistence(
+                "upsert-relationship",
+                sql`
+                  INSERT INTO harness_relationships (
+                    relationship_id, source_agent_id, target_agent_id, kind, topic,
+                    forked_from_turn_id, created_at
+                  ) VALUES (
+                    ${relationshipId}, ${input.sourceAgentId}, ${input.targetAgentId}, ${input.kind},
+                    ${input.topic ?? null}, ${input.forkedFromTurnId ?? null}, ${createdAt}
+                  )
+                  ON CONFLICT (source_agent_id, target_agent_id, kind) DO UPDATE SET
+                    topic = excluded.topic,
+                    forked_from_turn_id = excluded.forked_from_turn_id
+                `,
+              );
+              yield* bumpHarnessRevision;
+              yield* publishHarnessGraphChange;
+              return yield* readHarnessSnapshot();
+            }),
+            { "rpc.aggregate": "harness" },
+          ),
+        [WS_METHODS.harnessGraphOpenChannel]: (input) =>
+          observeHarnessRpcEffect(
+            WS_METHODS.harnessGraphOpenChannel,
+            Effect.gen(function* () {
+              if (input.agentAId === input.agentBId) {
+                return yield* harnessValidation(
+                  "open-channel",
+                  "A coordination channel needs two agents.",
+                );
+              }
+              yield* requireHarnessAgent(input.agentAId);
+              yield* requireHarnessAgent(input.agentBId);
+              const [agentAId, agentBId] =
+                input.agentAId < input.agentBId
+                  ? [input.agentAId, input.agentBId]
+                  : [input.agentBId, input.agentAId];
+              const existing = yield* harnessPersistence(
+                "load-channel-by-topic",
+                sql<{ readonly channel_id: string }>`
+                  SELECT channel_id FROM harness_channels
+                  WHERE agent_a_id = ${agentAId} AND agent_b_id = ${agentBId} AND topic = ${input.topic}
+                `,
+              );
+              if (existing[0] === undefined) {
+                const channelId =
+                  input.channelId ?? HarnessChannelId.make(yield* crypto.randomUUIDv4);
+                const createdAt = yield* nowIso;
+                yield* harnessPersistence(
+                  "open-channel",
+                  sql`
+                    INSERT INTO harness_channels (
+                      channel_id, agent_a_id, agent_b_id, topic, status, decisions_json,
+                      created_at, updated_at
+                    ) VALUES (
+                      ${channelId}, ${agentAId}, ${agentBId}, ${input.topic}, 'syncing', '[]',
+                      ${createdAt}, ${createdAt}
+                    )
+                  `,
+                );
+                yield* bumpHarnessRevision;
+                yield* publishHarnessGraphChange;
+              }
+              return yield* readHarnessSnapshot();
+            }),
+            { "rpc.aggregate": "harness" },
+          ),
+        [WS_METHODS.harnessGraphSendCoordination]: (input) =>
+          observeHarnessRpcEffect(
+            WS_METHODS.harnessGraphSendCoordination,
+            Effect.gen(function* () {
+              const channel = yield* requireHarnessChannel(input.channelId);
+              const senderIsA = input.senderAgentId === channel.agent_a_id;
+              const senderIsB = input.senderAgentId === channel.agent_b_id;
+              if (!senderIsA && !senderIsB) {
+                return yield* harnessValidation(
+                  "send-coordination",
+                  "The sender is not a channel participant.",
+                );
+              }
+              const duplicate = yield* harnessPersistence(
+                "load-coordination-deduplication",
+                sql<{ readonly message_id: string }>`
+                  SELECT message_id FROM harness_coordination_messages
+                  WHERE channel_id = ${input.channelId}
+                    AND sender_agent_id = ${input.senderAgentId}
+                    AND deduplication_key = ${input.deduplicationKey}
+                `,
+              );
+              if (duplicate[0] !== undefined) return yield* readHarnessSnapshot();
+              if (channel.convergence_round >= HARNESS_GRAPH_MAX_CONVERGENCE_ROUNDS) {
+                return yield* new HarnessGraphConvergenceLimitError({
+                  channelId: input.channelId,
+                  maxRounds: HARNESS_GRAPH_MAX_CONVERGENCE_ROUNDS,
+                });
+              }
+              const round = (input.round ?? channel.convergence_round + 1) as 1 | 2 | 3;
+              if (round < 1 || round > HARNESS_GRAPH_MAX_CONVERGENCE_ROUNDS) {
+                return yield* harnessValidation(
+                  "send-coordination",
+                  "Coordination rounds must be between 1 and 3.",
+                );
+              }
+              const revision =
+                (senderIsA ? Number(channel.revision_a) : Number(channel.revision_b)) + 1;
+              const recipientAgentId = senderIsA ? channel.agent_b_id : channel.agent_a_id;
+              const messageId = HarnessCoordinationMessageId.make(yield* crypto.randomUUIDv4);
+              const outboxId = HarnessDeliveryId.make(yield* crypto.randomUUIDv4);
+              const inboxId = HarnessDeliveryId.make(yield* crypto.randomUUIDv4);
+              const createdAt = yield* nowIso;
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              const decisions = JSON.stringify(input.decisions ?? []);
+              yield* harnessPersistence(
+                "send-coordination",
+                sql.withTransaction(
+                  Effect.gen(function* () {
+                    yield* sql`
+                      INSERT INTO harness_coordination_messages (
+                        message_id, channel_id, sender_agent_id, recipient_agent_id,
+                        author_kind, message_kind, topic, body, summary, decisions_json,
+                        revision, round, deduplication_key, created_at
+                      ) VALUES (
+                        ${messageId}, ${input.channelId}, ${input.senderAgentId}, ${recipientAgentId},
+                        ${input.authorKind}, ${input.kind}, ${input.topic ?? channel.topic}, ${input.body},
+                        ${input.summary ?? null}, ${decisions}, ${revision}, ${round},
+                        ${input.deduplicationKey}, ${createdAt}
+                      )
+                    `;
+                    yield* sql`
+                      INSERT INTO harness_deliveries (
+                        delivery_id, message_id, channel_id, sender_agent_id, recipient_agent_id,
+                        side, state, attempt_count, created_at, updated_at
+                      ) VALUES
+                        (${outboxId}, ${messageId}, ${input.channelId}, ${input.senderAgentId}, ${recipientAgentId}, 'outbox', 'pending', 0, ${createdAt}, ${createdAt}),
+                        (${inboxId}, ${messageId}, ${input.channelId}, ${input.senderAgentId}, ${recipientAgentId}, 'inbox', 'pending', 0, ${createdAt}, ${createdAt})
+                    `;
+                    yield* sql`
+                      UPDATE harness_channels SET
+                        ${senderIsA ? sql`revision_a = ${revision}` : sql`revision_b = ${revision}`},
+                        convergence_round = MAX(convergence_round, ${round}),
+                        status = 'syncing', updated_at = ${createdAt}
+                      WHERE channel_id = ${input.channelId}
+                    `;
+                  }),
+                ),
+              );
+              yield* bumpHarnessRevision;
+              yield* publishHarnessGraphChange;
+              return yield* readHarnessSnapshot();
+            }),
+            { "rpc.aggregate": "harness" },
+          ),
+        [WS_METHODS.harnessGraphAcknowledgeCoordination]: (input) =>
+          observeHarnessRpcEffect(
+            WS_METHODS.harnessGraphAcknowledgeCoordination,
+            Effect.gen(function* () {
+              const channel = yield* requireHarnessChannel(input.channelId);
+              const senderIsA = input.agentId === channel.agent_a_id;
+              const senderIsB = input.agentId === channel.agent_b_id;
+              if (!senderIsA && !senderIsB) {
+                return yield* harnessValidation(
+                  "acknowledge-coordination",
+                  "The acknowledger is not a channel participant.",
+                );
+              }
+              const message = yield* harnessPersistence(
+                "load-coordination-message",
+                sql<{
+                  readonly message_id: string;
+                  readonly sender_agent_id: string;
+                  readonly recipient_agent_id: string;
+                  readonly revision: number;
+                }>`
+                  SELECT message_id, sender_agent_id, recipient_agent_id, revision
+                  FROM harness_coordination_messages
+                  WHERE message_id = ${input.messageId} AND channel_id = ${input.channelId}
+                `,
+              );
+              if (message[0] === undefined) {
+                return yield* harnessValidation(
+                  "acknowledge-coordination",
+                  "The coordination message does not exist.",
+                );
+              }
+              if (message[0].recipient_agent_id !== input.agentId) {
+                return yield* harnessValidation(
+                  "acknowledge-coordination",
+                  "Only the message recipient can acknowledge coordination.",
+                );
+              }
+              const messageStreamRevision =
+                message[0].sender_agent_id === channel.agent_a_id
+                  ? Number(channel.revision_a)
+                  : message[0].sender_agent_id === channel.agent_b_id
+                    ? Number(channel.revision_b)
+                    : null;
+              if (
+                messageStreamRevision === null ||
+                input.revision < Number(message[0].revision) ||
+                input.revision > messageStreamRevision
+              ) {
+                return yield* harnessValidation(
+                  "acknowledge-coordination",
+                  "The acknowledged revision is outside the message stream.",
+                );
+              }
+              const updatedAt = yield* nowIso;
+              const nextAckA = senderIsA
+                ? Math.max(Number(channel.acknowledged_revision_a), input.revision)
+                : Number(channel.acknowledged_revision_a);
+              const nextAckB = senderIsB
+                ? Math.max(Number(channel.acknowledged_revision_b), input.revision)
+                : Number(channel.acknowledged_revision_b);
+              const aligned =
+                nextAckA >= Number(channel.revision_b) && nextAckB >= Number(channel.revision_a);
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              const decisions = JSON.stringify(
+                input.decisions ?? parseDecisions(channel.decisions_json),
+              );
+              yield* harnessPersistence(
+                "acknowledge-coordination",
+                sql.withTransaction(
+                  Effect.gen(function* () {
+                    yield* sql`
+                      UPDATE harness_channels SET
+                        acknowledged_revision_a = ${nextAckA},
+                        acknowledged_revision_b = ${nextAckB},
+                        convergence_round = MAX(convergence_round, ${input.round}),
+                        status = ${input.status ?? (aligned ? "aligned" : "syncing")},
+                        summary = ${input.summary ?? channel.summary},
+                        decisions_json = ${decisions},
+                        updated_at = ${updatedAt}
+                      WHERE channel_id = ${input.channelId}
+                    `;
+                    yield* sql`
+                      UPDATE harness_deliveries
+                      SET state = 'acknowledged', updated_at = ${updatedAt}
+                      WHERE message_id = ${input.messageId}
+                        AND side = 'inbox'
+                        AND recipient_agent_id = ${input.agentId}
+                    `;
+                  }),
+                ),
+              );
+              yield* bumpHarnessRevision;
+              yield* publishHarnessGraphChange;
+              return yield* readHarnessSnapshot();
+            }),
+            { "rpc.aggregate": "harness" },
+          ),
+        [WS_METHODS.harnessGraphSetChannelStatus]: (input) =>
+          observeHarnessRpcEffect(
+            WS_METHODS.harnessGraphSetChannelStatus,
+            Effect.gen(function* () {
+              const channel = yield* requireHarnessChannel(input.channelId);
+              const updatedAt = yield* nowIso;
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              const decisions = JSON.stringify(
+                input.decisions ?? parseDecisions(channel.decisions_json),
+              );
+              yield* harnessPersistence(
+                "set-channel-status",
+                sql`
+                  UPDATE harness_channels
+                  SET status = ${input.status}, summary = ${input.summary ?? channel.summary},
+                      decisions_json = ${decisions},
+                      updated_at = ${updatedAt}
+                  WHERE channel_id = ${input.channelId}
+                `,
+              );
+              yield* bumpHarnessRevision;
+              yield* publishHarnessGraphChange;
+              return yield* readHarnessSnapshot();
+            }),
+            { "rpc.aggregate": "harness" },
+          ),
+        [WS_METHODS.harnessGraphUpdateDelivery]: (input) =>
+          observeHarnessRpcEffect(
+            WS_METHODS.harnessGraphUpdateDelivery,
+            Effect.gen(function* () {
+              const rows = yield* harnessPersistence(
+                "load-delivery",
+                sql<{ readonly delivery_id: string }>`
+                  SELECT delivery_id FROM harness_deliveries
+                  WHERE delivery_id = ${input.deliveryId} AND side = ${input.side}
+                `,
+              );
+              if (rows[0] === undefined)
+                return yield* harnessValidation("update-delivery", "The delivery does not exist.");
+              const updatedAt = yield* nowIso;
+              yield* harnessPersistence(
+                "update-delivery",
+                sql`
+                  UPDATE harness_deliveries
+                  SET state = ${input.state}, last_error = ${input.error ?? null},
+                      attempt_count = attempt_count + 1, updated_at = ${updatedAt}
+                  WHERE delivery_id = ${input.deliveryId} AND side = ${input.side}
+                `,
+              );
+              yield* bumpHarnessRevision;
+              yield* publishHarnessGraphChange;
+              return yield* readHarnessSnapshot();
+            }),
+            { "rpc.aggregate": "harness" },
+          ),
+        [WS_METHODS.harnessGraphListDeliveries]: (input) =>
+          observeHarnessRpcEffect(
+            WS_METHODS.harnessGraphListDeliveries,
+            Effect.gen(function* () {
+              const deliveries =
+                input.agentId === undefined
+                  ? input.state === undefined
+                    ? yield* sql<HarnessDeliveryRow>`
+                        SELECT delivery_id, message_id, channel_id, sender_agent_id,
+                               recipient_agent_id, side, state, attempt_count, last_error,
+                               created_at, updated_at
+                        FROM harness_deliveries
+                        ORDER BY updated_at, delivery_id
+                      `
+                    : yield* sql<HarnessDeliveryRow>`
+                        SELECT delivery_id, message_id, channel_id, sender_agent_id,
+                               recipient_agent_id, side, state, attempt_count, last_error,
+                               created_at, updated_at
+                        FROM harness_deliveries
+                        WHERE state = ${input.state}
+                        ORDER BY updated_at, delivery_id
+                      `
+                  : input.state === undefined
+                    ? yield* sql<HarnessDeliveryRow>`
+                        SELECT delivery_id, message_id, channel_id, sender_agent_id,
+                               recipient_agent_id, side, state, attempt_count, last_error,
+                               created_at, updated_at
+                        FROM harness_deliveries
+                        WHERE sender_agent_id = ${input.agentId}
+                           OR recipient_agent_id = ${input.agentId}
+                        ORDER BY updated_at, delivery_id
+                      `
+                    : yield* sql<HarnessDeliveryRow>`
+                        SELECT delivery_id, message_id, channel_id, sender_agent_id,
+                               recipient_agent_id, side, state, attempt_count, last_error,
+                               created_at, updated_at
+                        FROM harness_deliveries
+                        WHERE state = ${input.state}
+                          AND (sender_agent_id = ${input.agentId}
+                            OR recipient_agent_id = ${input.agentId})
+                        ORDER BY updated_at, delivery_id
+                      `;
+              return deliveries.map(makeHarnessDelivery);
+            }),
+            { "rpc.aggregate": "harness" },
+          ),
       });
     }),
   );
@@ -3727,6 +4627,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     });
     const pullRequests = yield* PullRequestService.PullRequestService;
     const sql = yield* SqlClient.SqlClient;
+    const harnessGraphChanges = yield* PubSub.unbounded<void>();
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -3765,6 +4666,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               clientOrigin,
               clientAnalyticsProps,
               previewAutomationBroker,
+              harnessGraphChanges,
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
