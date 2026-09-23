@@ -91,6 +91,7 @@ import {
   HarnessGraphValidationError,
   HarnessRelationshipId,
   HARNESS_GRAPH_MAX_CONVERGENCE_ROUNDS,
+  ProviderInstanceId,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
@@ -143,6 +144,7 @@ import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import { readWorkflowScript } from "./orchestration/workflowScriptQuery.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
+import { foldHarnessNativeActivities } from "./harnessGraph.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
@@ -187,6 +189,8 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
+const decodeUnknownJsonString = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+const encodeUnknownJsonString = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -1854,6 +1858,12 @@ const makeWsRpcLayer = (
         readonly display_name: string;
         readonly role: "root" | "delegated" | "sidechat";
         readonly status: "active" | "paused" | "completed" | "failed";
+        readonly backing_kind: "thread" | "native";
+        readonly provider_name: string | null;
+        readonly provider_instance_id: string | null;
+        readonly provider_agent_id: string | null;
+        readonly parent_thread_id: string | null;
+        readonly capabilities_json: string;
         readonly parent_agent_id: string | null;
         readonly canvas_x: number;
         readonly canvas_y: number;
@@ -1980,24 +1990,55 @@ const makeWsRpcLayer = (
       };
       const nullable = (value: string | null): { readonly summary?: string } =>
         value === null ? {} : { summary: value };
-      const makeHarnessAgent = (row: HarnessAgentRow) => ({
-        agentId: HarnessAgentId.make(row.agent_id),
-        threadId: ThreadId.make(row.thread_id),
-        projectId: ProjectId.make(row.project_id),
-        displayName: row.display_name,
-        role: row.role,
-        status: row.status,
-        ...(row.parent_agent_id === null
-          ? {}
-          : { parentAgentId: HarnessAgentId.make(row.parent_agent_id) }),
-        canvas: {
-          x: Number(row.canvas_x),
-          y: Number(row.canvas_y),
-          collapsed: Number(row.canvas_collapsed) !== 0,
-        },
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      });
+      const parseHarnessCapabilities = (value: string): ReadonlyArray<"inspect"> => {
+        const parsed = parseDecisions(value).filter(
+          (capability): capability is "inspect" => capability === "inspect",
+        );
+        return parsed.length > 0 ? parsed : ["inspect"];
+      };
+      const makeHarnessAgent = (row: HarnessAgentRow) => {
+        const nativeBacking =
+          row.backing_kind === "native" &&
+          row.provider_agent_id !== null &&
+          row.parent_thread_id !== null
+            ? {
+                kind: "native" as const,
+                provider: row.provider_name ?? "native",
+                ...(row.provider_instance_id === null
+                  ? {}
+                  : { providerInstanceId: ProviderInstanceId.make(row.provider_instance_id) }),
+                providerAgentId: row.provider_agent_id,
+                parentThreadId: ThreadId.make(row.parent_thread_id),
+                capabilities: parseHarnessCapabilities(row.capabilities_json),
+              }
+            : null;
+        return {
+          agentId: HarnessAgentId.make(row.agent_id),
+          ...(nativeBacking === null
+            ? {
+                threadId: ThreadId.make(row.thread_id),
+                backing: {
+                  kind: "thread" as const,
+                  threadId: ThreadId.make(row.thread_id),
+                },
+              }
+            : { backing: nativeBacking }),
+          projectId: ProjectId.make(row.project_id),
+          displayName: row.display_name,
+          role: row.role,
+          status: row.status,
+          ...(row.parent_agent_id === null
+            ? {}
+            : { parentAgentId: HarnessAgentId.make(row.parent_agent_id) }),
+          canvas: {
+            x: Number(row.canvas_x),
+            y: Number(row.canvas_y),
+            collapsed: Number(row.canvas_collapsed) !== 0,
+          },
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        };
+      };
       const makeHarnessRelationship = (row: HarnessRelationshipRow) => ({
         relationshipId: HarnessRelationshipId.make(row.relationship_id),
         sourceAgentId: HarnessAgentId.make(row.source_agent_id),
@@ -2083,6 +2124,8 @@ const makeWsRpcLayer = (
           "load-agent",
           sql<HarnessAgentRow>`
             SELECT agent_id, thread_id, project_id, display_name, role, status,
+                   backing_kind, provider_name, provider_instance_id, provider_agent_id,
+                   parent_thread_id, capabilities_json,
                    parent_agent_id, canvas_x, canvas_y, canvas_collapsed,
                    created_at, updated_at
             FROM harness_agents WHERE agent_id = ${agentId}
@@ -2156,11 +2199,233 @@ const makeWsRpcLayer = (
           }
         }),
       );
+      const syncNativeHarnessAgents = harnessPersistence(
+        "sync-native-agents",
+        Effect.gen(function* () {
+          const shell = yield* projectionSnapshotQuery.getShellSnapshot();
+          const archivedShell = yield* projectionSnapshotQuery.getArchivedShellSnapshot();
+          const threads = [...shell.threads, ...archivedShell.threads];
+          const threadById = new Map<string, (typeof threads)[number]>(
+            threads.map((thread) => [thread.id, thread] as const),
+          );
+          const rootAgentRows = yield* sql<{
+            readonly agent_id: string;
+            readonly thread_id: string;
+            readonly backing_kind: "thread" | "native";
+          }>`
+            SELECT agent_id, thread_id, backing_kind
+            FROM harness_agents
+            WHERE backing_kind = 'thread'
+          `;
+          const rootAgentIdByThreadId = new Map(
+            rootAgentRows.map((row) => [row.thread_id, row.agent_id] as const),
+          );
+          const existingNativeRows = yield* sql<{
+            readonly agent_id: string;
+            readonly display_name: string;
+            readonly status: "active" | "paused" | "completed" | "failed";
+            readonly parent_agent_id: string | null;
+            readonly provider_name: string | null;
+            readonly provider_instance_id: string | null;
+            readonly provider_agent_id: string | null;
+            readonly parent_thread_id: string | null;
+            readonly capabilities_json: string;
+          }>`
+            SELECT agent_id, display_name, status, parent_agent_id, provider_name,
+                   provider_instance_id, provider_agent_id, parent_thread_id, capabilities_json
+            FROM harness_agents
+            WHERE backing_kind = 'native'
+          `;
+          const existingNativeById = new Map(
+            existingNativeRows.map((row) => [row.agent_id, row] as const),
+          );
+          const activityRows = yield* sql<{
+            readonly thread_id: string;
+            readonly kind: string;
+            readonly payload_json: string;
+            readonly created_at: string;
+          }>`
+            SELECT thread_id, kind, payload_json, created_at
+            FROM projection_thread_activities
+            WHERE kind IN ('task.started', 'task.progress', 'task.updated', 'task.completed')
+               OR (
+                 json_valid(payload_json) = 1
+                 AND json_extract(payload_json, '$.itemType') = 'collab_agent_tool_call'
+               )
+            ORDER BY thread_id,
+              CASE WHEN sequence IS NULL THEN 0 ELSE 1 END,
+              sequence, created_at, activity_id
+          `;
+          const activitiesByThread = new Map<
+            string,
+            Array<{
+              readonly kind: string;
+              readonly payload: unknown;
+              readonly createdAt: string;
+            }>
+          >();
+          for (const row of activityRows) {
+            let payload: unknown;
+            try {
+              payload = decodeUnknownJsonString(row.payload_json);
+            } catch {
+              continue;
+            }
+            const activities = activitiesByThread.get(row.thread_id) ?? [];
+            activities.push({ kind: row.kind, payload, createdAt: row.created_at });
+            activitiesByThread.set(row.thread_id, activities);
+          }
+
+          let changed = false;
+          let insertionIndex = rootAgentRows.length + existingNativeRows.length;
+          const nativeRows: Array<{
+            readonly agentId: string;
+            readonly storageThreadId: string;
+            readonly projectId: string;
+            readonly displayName: string;
+            readonly status: "active" | "paused" | "completed" | "failed";
+            readonly providerName: string;
+            readonly providerInstanceId: string | null;
+            readonly providerAgentId: string;
+            readonly parentThreadId: string;
+            readonly rootAgentId: string;
+            readonly parentAgentId: string;
+            readonly observedAt: string;
+          }> = [];
+
+          for (const [parentThreadId, activities] of activitiesByThread) {
+            const parentThread = threadById.get(parentThreadId);
+            const rootAgentId = rootAgentIdByThreadId.get(parentThreadId);
+            if (parentThread === undefined || rootAgentId === undefined) continue;
+            const observations = foldHarnessNativeActivities(activities);
+            const nativeAgentIdByProviderId = new Map(
+              observations.map(
+                (observation) =>
+                  [
+                    observation.providerAgentId,
+                    `native:${parentThreadId}:${observation.providerAgentId}`,
+                  ] as const,
+              ),
+            );
+            const providerName = parentThread.session?.providerName ?? "native";
+            const providerInstanceId = parentThread.session?.providerInstanceId ?? null;
+            const providerKey = providerInstanceId ?? providerName;
+            for (const observation of observations) {
+              const agentId = nativeAgentIdByProviderId.get(observation.providerAgentId);
+              if (agentId === undefined) continue;
+              const parentAgentId =
+                (observation.parentProviderAgentId === null
+                  ? undefined
+                  : nativeAgentIdByProviderId.get(observation.parentProviderAgentId)) ??
+                rootAgentId;
+              nativeRows.push({
+                agentId,
+                storageThreadId: `native:${parentThreadId}:${providerKey}:${observation.providerAgentId}`,
+                projectId: parentThread.projectId,
+                displayName: observation.title,
+                status: observation.status,
+                providerName,
+                providerInstanceId,
+                providerAgentId: observation.providerAgentId,
+                parentThreadId,
+                rootAgentId,
+                parentAgentId,
+                observedAt: observation.observedAt,
+              });
+            }
+          }
+
+          const nativeCapabilitiesJson = encodeUnknownJsonString(["inspect"]);
+          for (const row of nativeRows) {
+            const existing = existingNativeById.get(row.agentId);
+            if (
+              existing === undefined ||
+              existing.display_name !== row.displayName ||
+              existing.status !== row.status ||
+              existing.parent_agent_id !== row.parentAgentId ||
+              existing.provider_name !== row.providerName ||
+              existing.provider_instance_id !== row.providerInstanceId ||
+              existing.provider_agent_id !== row.providerAgentId ||
+              existing.parent_thread_id !== row.parentThreadId ||
+              existing.capabilities_json !== nativeCapabilitiesJson
+            ) {
+              changed = true;
+            }
+            const canvasColumn = insertionIndex % 4;
+            const canvasRow = Math.floor(insertionIndex / 4);
+            const createdAt = existing === undefined ? row.observedAt : undefined;
+            yield* sql`
+              INSERT INTO harness_agents (
+                agent_id, thread_id, project_id, display_name, role, status,
+                parent_agent_id, canvas_x, canvas_y, canvas_collapsed,
+                created_at, updated_at, backing_kind, provider_name,
+                provider_instance_id, provider_agent_id, parent_thread_id, capabilities_json
+              ) VALUES (
+                ${row.agentId}, ${row.storageThreadId}, ${row.projectId}, ${row.displayName},
+                'delegated', ${row.status}, ${row.rootAgentId},
+                ${80 + canvasColumn * 300}, ${80 + canvasRow * 190}, 0,
+                ${createdAt ?? row.observedAt}, ${row.observedAt}, 'native', ${row.providerName},
+                ${row.providerInstanceId}, ${row.providerAgentId}, ${row.parentThreadId},
+                ${nativeCapabilitiesJson}
+              )
+              ON CONFLICT (agent_id) DO UPDATE SET
+                thread_id = excluded.thread_id,
+                project_id = excluded.project_id,
+                display_name = excluded.display_name,
+                role = excluded.role,
+                status = excluded.status,
+                parent_agent_id = excluded.parent_agent_id,
+                updated_at = excluded.updated_at,
+                backing_kind = excluded.backing_kind,
+                provider_name = excluded.provider_name,
+                provider_instance_id = excluded.provider_instance_id,
+                provider_agent_id = excluded.provider_agent_id,
+                parent_thread_id = excluded.parent_thread_id,
+                capabilities_json = excluded.capabilities_json
+            `;
+            if (existing === undefined) insertionIndex += 1;
+          }
+
+          for (const row of nativeRows) {
+            if (row.parentAgentId !== row.rootAgentId) {
+              yield* sql`
+                UPDATE harness_agents
+                SET parent_agent_id = ${row.parentAgentId}, updated_at = ${row.observedAt}
+                WHERE agent_id = ${row.agentId}
+              `;
+            }
+            const relationshipId = `native-delegation:${row.agentId}`;
+            yield* sql`
+              DELETE FROM harness_relationships
+                WHERE relationship_id = ${relationshipId}
+            `;
+            yield* sql`
+              INSERT INTO harness_relationships (
+                relationship_id, source_agent_id, target_agent_id, kind, topic, created_at
+              ) VALUES (
+                ${relationshipId}, ${row.parentAgentId}, ${row.agentId}, 'delegation',
+                'Provider native subagent', ${row.observedAt}
+              )
+              ON CONFLICT (source_agent_id, target_agent_id, kind)
+              DO UPDATE SET topic = excluded.topic
+            `;
+          }
+
+          if (changed) {
+            yield* sql`
+              UPDATE harness_graph_meta
+              SET value = CAST(value AS INTEGER) + 1
+              WHERE key = 'revision'
+            `;
+          }
+        }),
+      );
       const readHarnessSnapshot = (input: { readonly projectId?: ProjectId | undefined } = {}) =>
         harnessPersistence(
           "read-snapshot",
           Effect.gen(function* () {
             yield* ensureHarnessAgents;
+            yield* syncNativeHarnessAgents;
             const revisionRows = yield* sql<{ readonly value: string }>`
               SELECT value FROM harness_graph_meta WHERE key = 'revision'
             `;
@@ -2168,12 +2433,16 @@ const makeWsRpcLayer = (
               input.projectId === undefined
                 ? yield* sql<HarnessAgentRow>`
                     SELECT agent_id, thread_id, project_id, display_name, role, status,
+                           backing_kind, provider_name, provider_instance_id, provider_agent_id,
+                           parent_thread_id, capabilities_json,
                            parent_agent_id, canvas_x, canvas_y, canvas_collapsed,
                            created_at, updated_at
                     FROM harness_agents ORDER BY created_at, agent_id
                   `
                 : yield* sql<HarnessAgentRow>`
                     SELECT agent_id, thread_id, project_id, display_name, role, status,
+                           backing_kind, provider_name, provider_instance_id, provider_agent_id,
+                           parent_thread_id, capabilities_json,
                            parent_agent_id, canvas_x, canvas_y, canvas_collapsed,
                            created_at, updated_at
                     FROM harness_agents WHERE project_id = ${input.projectId}
@@ -4146,8 +4415,34 @@ const makeWsRpcLayer = (
             WS_METHODS.harnessGraphSubscribe,
             Effect.gen(function* () {
               const subscription = yield* PubSub.subscribe(harnessGraphChanges);
+              const domainEvents = yield* orchestrationEngine.subscribeDomainEvents;
               const initial = yield* readHarnessSnapshot(input);
-              const changes = Stream.fromSubscription(subscription).pipe(
+              const nativeChanges = domainEvents.pipe(
+                Stream.filter((event) => {
+                  if (event.type !== "thread.activity-appended") return false;
+                  const activity = event.payload.activity;
+                  if (
+                    activity.kind === "task.started" ||
+                    activity.kind === "task.progress" ||
+                    activity.kind === "task.updated" ||
+                    activity.kind === "task.completed"
+                  ) {
+                    return true;
+                  }
+                  return (
+                    typeof activity.payload === "object" &&
+                    activity.payload !== null &&
+                    (activity.payload as { readonly itemType?: unknown }).itemType ===
+                      "collab_agent_tool_call"
+                  );
+                }),
+                Stream.debounce(Duration.millis(100)),
+                Stream.map(() => undefined),
+              );
+              const changes = Stream.merge(
+                Stream.fromSubscription(subscription),
+                nativeChanges,
+              ).pipe(
                 Stream.mapEffect(() =>
                   readHarnessSnapshot(input).pipe(
                     Effect.map((snapshot) => ({ kind: "changed" as const, snapshot })),
