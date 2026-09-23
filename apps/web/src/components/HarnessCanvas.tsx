@@ -11,6 +11,7 @@ import {
   ReactFlow,
   ReactFlowProvider,
   useEdgesState,
+  useNodesInitialized,
   useNodesState,
   useReactFlow,
   type Connection,
@@ -646,6 +647,7 @@ function HarnessCanvasInner({
   );
   const [nodes, setNodes, onNodesChange] = useNodesState<HarnessFlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const nodesInitialized = useNodesInitialized();
   const { fitView } = useReactFlow();
 
   const visibleSnapshot = useMemo(
@@ -705,6 +707,11 @@ function HarnessCanvasInner({
     visibleSnapshot.agents,
     visibleSnapshot.edges,
   ]);
+
+  useEffect(() => {
+    if (!nodesInitialized) return;
+    void fitView({ padding: 0.2, duration: 0 });
+  }, [fitView, nodesInitialized]);
 
   const onConnect = useCallback(
     (connection: Connection) => {
