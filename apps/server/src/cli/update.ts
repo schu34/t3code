@@ -62,6 +62,10 @@ const ReleaseIndex = Schema.Array(
 const decodeReleaseIndex = Schema.decodeUnknownEffect(Schema.fromJsonString(ReleaseIndex));
 
 const RELEASE_INDEX_TIMEOUT = Duration.seconds(30);
+// Harness does not publish a compatible T3 Code release stream. Keep the
+// command surface for package compatibility, but never query or install the
+// upstream runtime from a fork build.
+const UPSTREAM_CLI_UPDATES_ENABLED = false;
 // Enough to walk past a long run of nightlies without hammering the API when
 // a channel genuinely has nothing published.
 const RELEASE_INDEX_MAX_PAGES = 10;
@@ -260,6 +264,11 @@ export const updateCommand = Command.make("update", {
   ),
   Command.withHandler((flags) =>
     Effect.gen(function* () {
+      if (!UPSTREAM_CLI_UPDATES_ENABLED) {
+        return yield* new CliUpdateError({
+          reason: "Harness CLI updates are disabled; update this fork from its source checkout.",
+        });
+      }
       const logLevel = yield* GlobalFlag.LogLevel;
       const config = yield* resolveCliAuthConfig(flags, logLevel);
       return yield* runUpdate({
