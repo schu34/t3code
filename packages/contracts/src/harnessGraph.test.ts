@@ -84,4 +84,28 @@ describe("Harness MVP contracts", () => {
       }).body,
     ).toContain("Anything");
   });
+
+  it("distinguishes a provider-native child from a T3 thread", () => {
+    const agent = decodeAgent({
+      agentId: "native:child-1",
+      projectId: "project-1",
+      displayName: "Explore the code",
+      kind: "delegated",
+      roleDefinitionId: "role-general",
+      status: "active",
+      backing: {
+        kind: "native",
+        provider: "codex",
+        providerInstanceId: "codex",
+        providerAgentId: "child-1",
+        parentThreadId: "thread-1",
+        capabilities: ["inspect"],
+      },
+      createdAt: "2026-09-19T10:00:00.000Z",
+      updatedAt: "2026-09-19T10:00:00.000Z",
+    });
+
+    expect("threadId" in agent).toBe(false);
+    expect(agent.backing.kind).toBe("native");
+  });
 });

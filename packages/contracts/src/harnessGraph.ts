@@ -8,6 +8,7 @@ import {
   TurnId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import { ProviderInstanceId } from "./providerInstance.ts";
 
 /** Stable identity for a user-facing agent in the Harness graph. */
 export const HarnessAgentId = TrimmedNonEmptyString.pipe(Schema.brand("HarnessAgentId"));
@@ -45,14 +46,37 @@ export type HarnessAgentStatus = typeof HarnessAgentStatus.Type;
 
 export const HarnessMessageAuthorKind = Schema.Literals(["user", "agent"]);
 export type HarnessMessageAuthorKind = typeof HarnessMessageAuthorKind.Type;
-/** Stable locator persisted with graph metadata, not a second agent runtime. */
-export const HarnessAgentBackingReference = Schema.Struct({
+/** Operations the client can truthfully offer for a graph-backed agent. */
+export const HarnessAgentCapability = Schema.Literals(["inspect"]);
+export type HarnessAgentCapability = typeof HarnessAgentCapability.Type;
+
+const ThreadBackingReference = Schema.Struct({
   kind: Schema.Literal("thread"),
   threadId: ThreadId,
 });
+const NativeBackingReference = Schema.Struct({
+  kind: Schema.Literal("native"),
+  provider: TrimmedNonEmptyString,
+  providerInstanceId: Schema.optional(ProviderInstanceId),
+  providerAgentId: TrimmedNonEmptyString,
+  parentThreadId: ThreadId,
+});
+
+/** Stable locator persisted with graph metadata, not a second agent runtime. */
+export const HarnessAgentBackingReference = Schema.Union([
+  ThreadBackingReference,
+  NativeBackingReference,
+]);
 export type HarnessAgentBackingReference = typeof HarnessAgentBackingReference.Type;
 
-export const HarnessAgentBacking = HarnessAgentBackingReference;
+/** Backing details derived for the client; capabilities are not graph configuration. */
+export const HarnessAgentBacking = Schema.Union([
+  ThreadBackingReference,
+  Schema.Struct({
+    ...NativeBackingReference.fields,
+    capabilities: Schema.Array(HarnessAgentCapability),
+  }),
+]);
 export type HarnessAgentBacking = typeof HarnessAgentBacking.Type;
 
 export const HarnessRoleDefinition = Schema.Struct({

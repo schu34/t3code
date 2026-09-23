@@ -135,6 +135,7 @@ import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import { readWorkflowScript } from "./orchestration/workflowScriptQuery.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
+import { foldHarnessNativeActivities } from "./harnessGraph.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
@@ -179,6 +180,8 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
+const decodeUnknownJsonString = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+const encodeUnknownJsonString = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -3748,8 +3751,34 @@ const makeWsRpcLayer = (
             WS_METHODS.harnessGraphSubscribe,
             Effect.gen(function* () {
               const subscription = yield* PubSub.subscribe(harnessGraphChanges);
+              const domainEvents = yield* orchestrationEngine.subscribeDomainEvents;
               const initial = yield* graphStore.read(input);
-              const changes = Stream.fromSubscription(subscription).pipe(
+              const nativeChanges = domainEvents.pipe(
+                Stream.filter((event) => {
+                  if (event.type !== "thread.activity-appended") return event.type.startsWith("thread.");
+                  const activity = event.payload.activity;
+                  if (
+                    activity.kind === "task.started" ||
+                    activity.kind === "task.progress" ||
+                    activity.kind === "task.updated" ||
+                    activity.kind === "task.completed"
+                  ) {
+                    return true;
+                  }
+                  return (
+                    typeof activity.payload === "object" &&
+                    activity.payload !== null &&
+                    (activity.payload as { readonly itemType?: unknown }).itemType ===
+                      "collab_agent_tool_call"
+                  );
+                }),
+                Stream.debounce(Duration.millis(100)),
+                Stream.map(() => undefined),
+              );
+              const changes = Stream.merge(
+                Stream.fromSubscription(subscription),
+                nativeChanges,
+              ).pipe(
                 Stream.mapEffect(() =>
                   graphStore
                     .read(input)
