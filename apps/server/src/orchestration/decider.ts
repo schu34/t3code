@@ -398,6 +398,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           projectId: command.projectId,
+          ...(command.threadKind !== undefined ? { threadKind: command.threadKind } : {}),
+          ...(command.parentThreadId !== undefined
+            ? { parentThreadId: command.parentThreadId }
+            : {}),
           title: command.title,
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
