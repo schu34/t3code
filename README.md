@@ -1,6 +1,8 @@
 # Harness
 
-Harness is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code)), [web app](https://app.t3.codes) and [Electron-based desktop app](https://t3.codes).
+Harness is a local fork of [T3 Code](https://github.com/pingdotgg/t3code), an "agent harness control surface" for the agents on your machine.
+
+This fork is based on upstream commit `b44c1ce5d25ee0d5a5be82e380618a886c19ea96`. Harness keeps the upstream MIT license and package internals while using its own desktop identity and data directory.
 
 Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCode, and Google Antigravity. If they're set up on your computer, Harness can control them.
 
@@ -9,6 +11,16 @@ Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCod
 Nothing. We built Harness because we wanted the best possible development experience with agents. We were inspired by existing solutions like the Codex desktop app, Conductor, Claude Desktop and Cursor Glass, but none met our bar.
 
 We wanted something performant, remote-ready, and truly open. If we ever go the wrong direction, we want you to have everything you need to fork and build the editor that you want.
+
+## Local development
+
+Install dependencies with `vp i`, then start the web and server surfaces with:
+
+```bash
+vp run dev
+```
+
+Harness stores standalone and worktree development state under `.harness` (or `~/.harness` outside a worktree). Set `T3CODE_HOME` or pass `--home-dir`/`--base-dir` when you need a different location.
 
 ## Installation
 
