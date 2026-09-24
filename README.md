@@ -22,6 +22,10 @@ vp run dev
 
 Harness stores standalone and worktree development state under `.harness` (or `~/.harness` outside a worktree). Set `T3CODE_HOME` or pass `--home-dir`/`--base-dir` when you need a different location.
 
+## Agent canvas
+
+The chat landing page shows project threads and supported provider-native child agents as a graph. Select a native child to inspect its live transcript in the parent thread's Agents panel. Agent relationships and canvas positions are saved locally.
+
 ## Installation
 
 > [!WARNING]
