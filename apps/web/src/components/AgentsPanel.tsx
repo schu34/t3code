@@ -21,11 +21,14 @@ import {
   formatSubagentTokenCount,
 } from "@t3tools/client-runtime/state/subagentRuntime";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { providerChildThreadId } from "@t3tools/contracts";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { Bot, Braces, Check, ChevronDown, ChevronRight, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import { orchestrationEnvironment } from "~/state/orchestration";
+import { useThread } from "~/state/entities";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { Button } from "~/components/ui/button";
 
@@ -136,8 +139,103 @@ function agentActivityText(agent: RuntimeSubagent): string | null {
   );
 }
 
-/** Flat, non-interactive agent status line. No unfold. */
-function AgentRow({ agent }: { agent: RuntimeSubagent }) {
+function activityTimeLabel(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+}
+
+function AgentTranscript({ thread }: { thread: ReturnType<typeof useThread> }) {
+  const messages =
+    thread?.messages
+      .filter((message) => message.role === "assistant" || message.role === "user")
+      .slice(-8) ?? [];
+
+  return (
+    <div className="mb-2 rounded-md border border-border/50 bg-background/40 px-2 py-1.5">
+      <div className="mb-1 text-[.65rem] font-medium uppercase tracking-wider text-muted-foreground">
+        Live transcript
+      </div>
+      {messages.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          {thread === null ? "Waiting for the child transcript…" : "No transcript yet."}
+        </p>
+      ) : (
+        <ol className="space-y-1.5">
+          {messages.map((message) => (
+            <li key={message.id} className="text-xs">
+              <span className="mr-1 font-mono text-[.65rem] uppercase text-muted-foreground/70">
+                {message.role === "user" ? "You" : "Agent"}
+              </span>
+              <span className="whitespace-pre-wrap break-words text-foreground/90">
+                {message.text || (message.streaming ? "…" : "")}
+              </span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+function AgentActivityDetail({
+  agent,
+  childThread,
+}: {
+  agent: RuntimeSubagent;
+  childThread: ReturnType<typeof useThread>;
+}) {
+  return (
+    <div
+      className="mx-1.5 mb-1 rounded-md border border-primary/25 bg-primary/[0.04] px-2 py-1.5"
+      data-agent-activity-detail={agent.id}
+    >
+      {agent.role === "provider-native" ? <AgentTranscript thread={childThread} /> : null}
+      <div className="mb-1 flex items-center justify-between gap-2 text-[.65rem] font-medium uppercase tracking-wider text-muted-foreground">
+        <span>Recent activity</span>
+        <span>{STATUS_VISUALS[agent.status].label}</span>
+      </div>
+      {agent.recentActivity.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No detailed activity has arrived yet.</p>
+      ) : (
+        <ol className="space-y-1">
+          {agent.recentActivity.map((entry) => (
+            <li key={`${entry.at}:${entry.summary}`} className="flex gap-2 text-xs">
+              <time className="shrink-0 font-mono text-[.65rem] text-muted-foreground/70">
+                {activityTimeLabel(entry.at)}
+              </time>
+              <span className="min-w-0 whitespace-pre-wrap break-words text-foreground/85">
+                {entry.summary}
+              </span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+/** Flat agent status line; the selected row expands to show recent activity. */
+function AgentRow({
+  agent,
+  selected = false,
+  environmentId,
+  threadId,
+}: {
+  agent: RuntimeSubagent;
+  selected?: boolean;
+  environmentId: EnvironmentId | null;
+  threadId: ThreadId | null;
+}) {
+  const childThreadRef =
+    selected === true &&
+    agent.role === "provider-native" &&
+    environmentId !== null &&
+    threadId !== null
+      ? scopeThreadRef(environmentId, providerChildThreadId(threadId, agent.id))
+      : null;
+  const childThread = useThread(childThreadRef, { waitForShell: false });
   const visuals = STATUS_VISUALS[agent.status];
   const statusLabel =
     agent.kind === "subagent_batch" && agent.status === "idle" ? "Idle" : visuals.label;
@@ -155,38 +253,48 @@ function AgentRow({ agent }: { agent: RuntimeSubagent }) {
   ].filter((value): value is string => value !== null);
 
   return (
-    <div className="grid h-[3.875rem] grid-cols-[0.375rem_minmax(0,1fr)_auto] grid-rows-[1.25rem_1.125rem_1rem] items-center gap-x-2 rounded-md px-1.5 py-1">
-      <span className="col-start-1 row-start-1 flex items-center">
-        <StatusDot status={agent.status} />
-      </span>
-      <span className="col-start-2 row-start-1 flex min-w-0 items-baseline gap-2">
-        <span className="min-w-0 truncate text-sm font-medium">{agent.title}</span>
-        {role ? (
-          <span className="max-w-28 shrink-0 truncate rounded-sm border border-border/60 px-1 font-mono text-[.65rem] text-muted-foreground">
-            {role}
-          </span>
-        ) : null}
-      </span>
-      <span className="col-start-3 row-start-1 min-w-14 text-right font-mono text-[.7rem] text-muted-foreground/80">
-        <span className="inline-flex items-center gap-1">
-          <AgentElapsed agent={agent} />
-          {agent.status === "completed" ? (
-            <Check aria-hidden className="size-3 text-success" />
+    <div>
+      <div
+        className={cn(
+          "grid h-[3.875rem] grid-cols-[0.375rem_minmax(0,1fr)_auto] grid-rows-[1.25rem_1.125rem_1rem] items-center gap-x-2 rounded-md px-1.5 py-1",
+          selected && "bg-accent/35 ring-1 ring-primary/30",
+        )}
+        data-agent-row={agent.id}
+        aria-current={selected ? "true" : undefined}
+      >
+        <span className="col-start-1 row-start-1 flex items-center">
+          <StatusDot status={agent.status} />
+        </span>
+        <span className="col-start-2 row-start-1 flex min-w-0 items-baseline gap-2">
+          <span className="min-w-0 truncate text-sm font-medium">{agent.title}</span>
+          {role ? (
+            <span className="max-w-28 shrink-0 truncate rounded-sm border border-border/60 px-1 font-mono text-[.65rem] text-muted-foreground">
+              {role}
+            </span>
           ) : null}
         </span>
-      </span>
-      <span
-        className={cn(
-          "col-start-2 col-end-4 row-start-2 block truncate text-xs",
-          agent.status === "failed" ? "text-destructive-foreground" : "text-muted-foreground",
-        )}
-      >
-        {activity ?? statusLabel}
-      </span>
-      <span className="col-start-2 col-end-4 row-start-3 truncate font-mono text-[.7rem] tabular-nums text-muted-foreground/70">
-        {metadata.join(" · ")}
-      </span>
-      <span className="sr-only">{statusLabel}</span>
+        <span className="col-start-3 row-start-1 min-w-14 text-right font-mono text-[.7rem] text-muted-foreground/80">
+          <span className="inline-flex items-center gap-1">
+            <AgentElapsed agent={agent} />
+            {agent.status === "completed" ? (
+              <Check aria-hidden className="size-3 text-success" />
+            ) : null}
+          </span>
+        </span>
+        <span
+          className={cn(
+            "col-start-2 col-end-4 row-start-2 block truncate text-xs",
+            agent.status === "failed" ? "text-destructive-foreground" : "text-muted-foreground",
+          )}
+        >
+          {activity ?? statusLabel}
+        </span>
+        <span className="col-start-2 col-end-4 row-start-3 truncate font-mono text-[.7rem] tabular-nums text-muted-foreground/70">
+          {metadata.join(" · ")}
+        </span>
+        <span className="sr-only">{statusLabel}</span>
+      </div>
+      {selected ? <AgentActivityDetail agent={agent} childThread={childThread} /> : null}
     </div>
   );
 }
@@ -318,11 +426,18 @@ function WorkflowScriptView({
 function PhaseSection({
   phase,
   defaultOpen = false,
+  selectedAgentId,
+  environmentId,
+  threadId,
 }: {
   phase: AgentPanelWorkflowGroup["phases"][number];
   defaultOpen?: boolean;
+  selectedAgentId: string | null;
+  environmentId: EnvironmentId | null;
+  threadId: ThreadId | null;
 }) {
-  const [open, setOpen] = useState(defaultOpen || phase.state === "running");
+  const selectedInPhase = phase.members.some((member) => member.id === selectedAgentId);
+  const [open, setOpen] = useState(defaultOpen || phase.state === "running" || selectedInPhase);
   const previousState = useRef(phase.state);
 
   useEffect(() => {
@@ -331,6 +446,9 @@ function PhaseSection({
     }
     previousState.current = phase.state;
   }, [phase.state]);
+  useEffect(() => {
+    if (selectedInPhase) setOpen(true);
+  }, [selectedInPhase]);
 
   return (
     <div>
@@ -369,7 +487,17 @@ function PhaseSection({
           </span>
         ) : null}
       </button>
-      {open ? phase.members.map((member) => <AgentRow key={member.id} agent={member} />) : null}
+      {open
+        ? phase.members.map((member) => (
+            <AgentRow
+              key={member.id}
+              agent={member}
+              selected={member.id === selectedAgentId}
+              environmentId={environmentId}
+              threadId={threadId}
+            />
+          ))
+        : null}
     </div>
   );
 }
@@ -380,11 +508,13 @@ function ExpandedWorkflowSection({
   environmentId,
   threadId,
   onCollapse,
+  selectedAgentId,
 }: {
   group: AgentPanelWorkflowGroup;
   environmentId: EnvironmentId | null;
   threadId: ThreadId | null;
   onCollapse: () => void;
+  selectedAgentId: string | null;
 }) {
   const [scriptOpen, setScriptOpen] = useState(false);
   const members = workflowMembers(group);
@@ -439,13 +569,33 @@ function ExpandedWorkflowSection({
         />
       ) : null}
       {group.phases.map((phase) => (
-        <PhaseSection key={phase.index} phase={phase} defaultOpen={!workflowIsLive(group)} />
+        <PhaseSection
+          key={phase.index}
+          phase={phase}
+          defaultOpen={
+            !workflowIsLive(group) || phase.members.some((member) => member.id === selectedAgentId)
+          }
+          selectedAgentId={selectedAgentId}
+          environmentId={environmentId}
+          threadId={threadId}
+        />
       ))}
       {group.unphasedMembers.map((member) => (
-        <AgentRow key={member.id} agent={member} />
+        <AgentRow
+          key={member.id}
+          agent={member}
+          selected={member.id === selectedAgentId}
+          environmentId={environmentId}
+          threadId={threadId}
+        />
       ))}
       {group.phases.length === 0 && group.unphasedMembers.length === 0 ? (
-        <AgentRow agent={group.workflow} />
+        <AgentRow
+          agent={group.workflow}
+          selected={group.workflow.id === selectedAgentId}
+          environmentId={environmentId}
+          threadId={threadId}
+        />
       ) : null}
     </section>
   );
@@ -503,18 +653,25 @@ function WorkflowSection({
   group,
   environmentId,
   threadId,
+  selectedAgentId,
 }: {
   group: AgentPanelWorkflowGroup;
   environmentId: EnvironmentId | null;
   threadId: ThreadId | null;
+  selectedAgentId: string | null;
 }) {
-  const [open, setOpen] = useState(() => workflowIsLive(group));
+  const selectedInGroup = workflowMembers(group).some((agent) => agent.id === selectedAgentId);
+  const [open, setOpen] = useState(() => workflowIsLive(group) || selectedInGroup);
+  useEffect(() => {
+    if (selectedInGroup) setOpen(true);
+  }, [selectedInGroup]);
   return open ? (
     <ExpandedWorkflowSection
       group={group}
       environmentId={environmentId}
       threadId={threadId}
       onCollapse={() => setOpen(false)}
+      selectedAgentId={selectedAgentId}
     />
   ) : (
     <CollapsedWorkflowSection group={group} onExpand={() => setOpen(true)} />
@@ -525,10 +682,12 @@ export function AgentsPanel({
   model,
   environmentId = null,
   threadId = null,
+  selectedAgentId = null,
 }: {
   model: AgentPanelModel;
   environmentId?: EnvironmentId | null;
   threadId?: ThreadId | null;
+  selectedAgentId?: string | null;
 }) {
   if (!model.hasAgents) {
     return (
@@ -553,6 +712,7 @@ export function AgentsPanel({
               group={group}
               environmentId={environmentId}
               threadId={threadId}
+              selectedAgentId={selectedAgentId ?? null}
             />
           ))}
           {model.directAgents.length > 0 ? (
@@ -561,7 +721,13 @@ export function AgentsPanel({
                 Direct spawns
               </div>
               {model.directAgents.map((agent) => (
-                <AgentRow key={agent.id} agent={agent} />
+                <AgentRow
+                  key={agent.id}
+                  agent={agent}
+                  selected={agent.id === selectedAgentId}
+                  environmentId={environmentId}
+                  threadId={threadId}
+                />
               ))}
             </section>
           ) : null}

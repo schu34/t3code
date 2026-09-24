@@ -12,18 +12,20 @@ import { useCallback, useMemo } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useComposerDraftStore } from "../composerDraftStore";
 
-import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { SidebarInset } from "./ui/sidebar";
 import HarnessCanvas from "./HarnessCanvas";
 import {
   buildHarnessCanvasSnapshotFromThreads,
   harnessAgentId,
+  harnessNativeAgentId,
   layoutHarnessCanvasAgents,
   type HarnessCanvasActions,
   type HarnessCanvasAgent,
   type HarnessCanvasChannel,
   type HarnessCanvasSnapshot,
 } from "../harnessCanvas.logic";
+import { useRightPanelStore } from "../rightPanelStore";
 import {
   harnessGraphGetChannel,
   harnessGraphOpenChannel,
@@ -45,12 +47,18 @@ function graphAgentFor(
   graph: HarnessGraphSnapshot | null,
   localAgent: HarnessCanvasAgent,
 ): HarnessGraphSnapshot["agents"][number] | undefined {
-  return graph?.agents.find(
-    (agent) =>
-      agent.backing?.kind !== "native" &&
-      agent.threadId === localAgent.threadId &&
-      agent.projectId === localAgent.projectId,
-  );
+  if (graph === null) return undefined;
+  const nativeBacking = localAgent.backing?.kind === "native" ? localAgent.backing : undefined;
+  if (nativeBacking !== undefined) {
+    return graph.agents.find((agent) => agent.agentId === nativeBacking.serverAgentId);
+  }
+  const threadBacking = localAgent.backing?.kind === "thread" ? localAgent.backing : undefined;
+  const threadId = threadBacking?.threadId ?? localAgent.threadId;
+  return threadId === undefined
+    ? undefined
+    : graph.agents.find(
+        (agent) => agent.threadId === threadId && agent.projectId === localAgent.projectId,
+      );
 }
 
 function defaultRoleId(projectId: string): HarnessRoleDefinitionId {
@@ -125,12 +133,17 @@ function buildSnapshot(
   if (graph === null) return base;
 
   const graphOnlyAgents = graph.agents.flatMap((serverAgent) => {
-    if (serverAgent.backing?.kind === "native" || serverAgent.threadId === undefined) return [];
-    const alreadyVisible = base.agents.some(
-      (agent) =>
-        agent.threadId === serverAgent.threadId && agent.projectId === serverAgent.projectId,
-    );
+    const nativeBacking = serverAgent.backing?.kind === "native" ? serverAgent.backing : undefined;
+    const alreadyVisible = base.agents.some((agent) => {
+      const threadBacking = agent.backing?.kind === "thread" ? agent.backing : undefined;
+      return (
+        nativeBacking === undefined &&
+        (threadBacking?.threadId ?? agent.threadId) === serverAgent.threadId &&
+        agent.projectId === serverAgent.projectId
+      );
+    });
     if (alreadyVisible) return [];
+    if (nativeBacking === undefined && serverAgent.threadId === undefined) return [];
     const project = projects.find(
       (candidate) =>
         candidate.environmentId === environmentId && candidate.id === serverAgent.projectId,
@@ -138,6 +151,7 @@ function buildSnapshot(
     const draft = drafts.find(
       (candidate) =>
         candidate.environmentId === environmentId &&
+        serverAgent.threadId !== undefined &&
         candidate.threadId === serverAgent.threadId &&
         candidate.projectId === serverAgent.projectId,
     );
@@ -148,12 +162,33 @@ function buildSnapshot(
           ? ("waiting" as const)
           : serverAgent.status === "completed"
             ? ("stopped" as const)
-            : ("idle" as const);
+            : nativeBacking === undefined
+              ? ("idle" as const)
+              : ("working" as const);
+    const localId =
+      nativeBacking === undefined
+        ? harnessAgentId(environmentId, serverAgent.threadId!)
+        : harnessNativeAgentId(environmentId, serverAgent.agentId);
     return [
       {
-        id: harnessAgentId(environmentId, serverAgent.threadId),
+        id: localId,
         environmentId,
-        threadId: serverAgent.threadId,
+        ...(serverAgent.threadId === undefined ? {} : { threadId: serverAgent.threadId }),
+        ...(nativeBacking === undefined
+          ? serverAgent.threadId === undefined
+            ? {}
+            : { backing: { kind: "thread" as const, threadId: serverAgent.threadId } }
+          : {
+              backing: {
+                kind: "native" as const,
+                serverAgentId: serverAgent.agentId,
+                ...(serverAgent.threadId === undefined ? {} : { threadId: serverAgent.threadId }),
+                provider: nativeBacking.provider,
+                providerAgentId: nativeBacking.providerAgentId,
+                parentThreadId: nativeBacking.parentThreadId,
+                capabilities: nativeBacking.capabilities,
+              },
+            }),
         ...(draft === undefined ? {} : { draftId: draft.draftId }),
         projectId: serverAgent.projectId,
         title: serverAgent.displayName,
@@ -161,11 +196,15 @@ function buildSnapshot(
         activity:
           serverAgent.status === "failed"
             ? "Agent failed"
-            : serverAgent.status === "paused"
-              ? "Paused by Harness"
-              : serverAgent.status === "completed"
-                ? "Completed"
-                : "Awaiting first turn",
+            : serverAgent.status === "completed"
+              ? "Completed"
+              : nativeBacking !== undefined
+                ? serverAgent.status === "paused"
+                  ? `Native ${nativeBacking.provider} subagent · paused`
+                  : `Native ${nativeBacking.provider} subagent`
+                : serverAgent.status === "paused"
+                  ? "Paused by Harness"
+                  : "Awaiting first turn",
         runtimeState,
         deliveryStage: "implementing" as const,
         archived: serverAgent.status === "completed",
@@ -446,9 +485,7 @@ export default function HarnessWorkspace() {
         const localIdByServerId = new Map(
           graph?.agents.flatMap((serverAgent) => {
             const local = snapshot.agents.find(
-              (agent) =>
-                agent.threadId === serverAgent.threadId &&
-                agent.projectId === serverAgent.projectId,
+              (agent) => graphAgentFor(graph, agent)?.agentId === serverAgent.agentId,
             );
             return local === undefined ? [] : [[serverAgent.agentId, local.id] as const];
           }) ?? [],
@@ -518,9 +555,17 @@ export default function HarnessWorkspace() {
         });
         return;
       }
+      const nativeBacking = agent.backing?.kind === "native" ? agent.backing : undefined;
+      const threadId = nativeBacking?.parentThreadId ?? agent.threadId;
+      if (threadId === undefined) return;
+      if (nativeBacking !== undefined) {
+        useRightPanelStore
+          .getState()
+          .openAgents(scopeThreadRef(agent.environmentId, threadId), nativeBacking.providerAgentId);
+      }
       void navigate({
         to: "/$environmentId/$threadId",
-        params: { environmentId: agent.environmentId, threadId: agent.threadId },
+        params: { environmentId: agent.environmentId, threadId },
       });
     },
     [navigate],

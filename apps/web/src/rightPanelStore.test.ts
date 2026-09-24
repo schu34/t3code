@@ -437,6 +437,23 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("focuses and clears a delegated agent in the agents surface", () => {
+    const store = useRightPanelStore.getState();
+    store.openAgents(refA, "provider-child-1");
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "agents",
+      surfaces: [{ id: "agents", kind: "agents", agentId: "provider-child-1" }],
+    });
+
+    store.openAgents(refA);
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "agents",
+      surfaces: [{ id: "agents", kind: "agents" }],
+    });
+  });
+
   it("keeps files as a singleton surface", () => {
     useRightPanelStore.getState().open(refA, "files");
     useRightPanelStore.getState().open(refA, "files");
