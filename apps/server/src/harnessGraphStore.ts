@@ -7,6 +7,7 @@ import {
   HarnessRelationshipId,
   HarnessRoleDefinitionId,
   ProviderInstanceId,
+  providerChildThreadId,
   ThreadId,
   TurnId,
   type HarnessAgentMetadata,
@@ -346,9 +347,11 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
             metadata.backing.kind === "native"
               ? {
                   ...metadata.backing,
+                  threadId: providerChildThreadId(metadata.backing.parentThreadId, metadata.backing.providerAgentId),
                   capabilities: ["inspect" as const],
                 }
               : metadata.backing,
+
           projectId: thread.projectId,
           displayName: native?.title ?? thread.title,
           status: native?.status ?? status,

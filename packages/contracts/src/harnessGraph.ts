@@ -74,6 +74,7 @@ export const HarnessAgentBacking = Schema.Union([
   ThreadBackingReference,
   Schema.Struct({
     ...NativeBackingReference.fields,
+    threadId: Schema.optional(ThreadId),
     capabilities: Schema.Array(HarnessAgentCapability),
   }),
 ]);
