@@ -11,6 +11,7 @@ import {
   IsoDateTime,
   ModelSelection,
   NonNegativeInt,
+  OrchestrationThreadKind,
   ProjectId,
   ProviderInteractionMode,
   RuntimeMode,
@@ -29,6 +30,8 @@ import type { ProjectionRepositoryError } from "../Errors.ts";
 export const ProjectionThread = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
+  threadKind: Schema.optional(OrchestrationThreadKind),
+  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   title: Schema.String,
   titleState: Schema.optional(Schema.NullOr(ThreadTitleState)),
   modelSelection: ModelSelection,

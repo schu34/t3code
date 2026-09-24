@@ -1097,9 +1097,12 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
   it.effect("carries child model metadata through every task event", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();
-      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 10)).pipe(
-        Effect.forkChild,
-      );
+      const eventsFiber = yield* Stream.runCollect(
+        Stream.take(
+          Stream.filter(adapter.streamEvents, (event) => event.type.startsWith("task.")),
+          10,
+        ),
+      ).pipe(Effect.forkChild);
 
       const cases = [
         ["collabAgent/started", {}],
@@ -1180,9 +1183,12 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
   it.effect("does not reactivate an idle child after a parent interaction", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();
-      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 3)).pipe(
-        Effect.forkChild,
-      );
+      const eventsFiber = yield* Stream.runCollect(
+        Stream.take(
+          Stream.filter(adapter.streamEvents, (event) => event.type.startsWith("task.")),
+          3,
+        ),
+      ).pipe(Effect.forkChild);
 
       const childEvent = (id: string, method: string, payload: Record<string, unknown>) => ({
         id: asEventId(id),
@@ -1235,6 +1241,81 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
           { taskId: "child-2", status: "running" },
         ],
       );
+    }),
+  );
+
+  it.effect("routes native child output onto a durable child thread", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 6)).pipe(
+        Effect.forkChild,
+      );
+      const childEvent = (
+        id: string,
+        method: string,
+        payload: Record<string, unknown>,
+        options: { readonly itemId?: string } = {},
+      ): ProviderEvent => ({
+        id: asEventId(id),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("parent-turn"),
+        ...(options.itemId ? { itemId: asItemId(options.itemId) } : {}),
+        payload: {
+          agentThreadId: "child-transcript",
+          agentPath: "/root/transcript",
+          ...payload,
+        },
+      });
+
+      yield* runtime.emit(childEvent("evt-child-start", "collabAgent/started", {}));
+      yield* runtime.emit(
+        childEvent("evt-child-turn-start", "collabAgent/turnStarted", {
+          childTurnId: "child-turn-1",
+        }),
+      );
+      yield* runtime.emit(
+        childEvent(
+          "evt-child-output",
+          "collabAgent/outputDelta",
+          {
+            childTurnId: "child-turn-1",
+            streamKind: "assistant_text",
+            delta: "child response",
+          },
+          { itemId: "child-item-1" },
+        ),
+      );
+      yield* runtime.emit(
+        childEvent("evt-child-turn-complete", "collabAgent/turnCompleted", {
+          turn: { id: "child-turn-1", status: "completed" },
+        }),
+      );
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      NodeAssert.deepStrictEqual(
+        events.map((event) => event.type),
+        [
+          "task.started",
+          "task.updated",
+          "turn.started",
+          "content.delta",
+          "task.updated",
+          "turn.completed",
+        ],
+      );
+      NodeAssert.equal(events[0]?.threadId, asThreadId("thread-1"));
+      NodeAssert.equal(events[2]?.threadId, asThreadId("harness-child:thread-1:child-transcript"));
+      NodeAssert.equal(events[2]?.turnId, asTurnId("child-turn-1"));
+      NodeAssert.equal(events[3]?.threadId, events[2]?.threadId);
+      if (events[3]?.type === "content.delta") {
+        NodeAssert.equal(events[3].payload.delta, "child response");
+      }
+      NodeAssert.equal(events[5]?.threadId, events[2]?.threadId);
+      NodeAssert.equal(events[5]?.turnId, asTurnId("child-turn-1"));
     }),
   );
 
