@@ -85,7 +85,7 @@ export type RightPanelSurface =
     }
   /** The thread's linked pull requests, one singleton tab beside any number of `pull-request` tabs. */
   | { id: "pull-requests"; kind: "pull-requests" }
-  | { id: "agents"; kind: "agents" };
+  | { id: "agents"; kind: "agents"; agentId?: string };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 // v9 removed the "plan" surface kind (plans render inline in the transcript).
@@ -131,6 +131,7 @@ interface RightPanelStoreState {
     ref: ScopedThreadRef,
     kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request">,
   ) => void;
+  openAgents: (ref: ScopedThreadRef, agentId?: string) => void;
   openDevice: (ref: ScopedThreadRef, target: DeviceTabTarget, automatic?: boolean) => void;
   renameDevice: (ref: ScopedThreadRef, surfaceId: string, title: string) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
@@ -514,6 +515,20 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               return upsertSurface(current, existing ?? browserSurface(null));
             }
             return upsertSurface(current, singletonSurface(kind));
+          }),
+        ),
+      openAgents: (ref, agentId) =>
+        set((state) =>
+          userAction(state, scopedThreadKey(ref), (current) => {
+            const surface: Extract<RightPanelSurface, { kind: "agents" }> = {
+              id: "agents",
+              kind: "agents",
+              ...(agentId === undefined ? {} : { agentId }),
+            };
+            const surfaces = current.surfaces.some((entry) => entry.id === "agents")
+              ? current.surfaces.map((entry) => (entry.id === "agents" ? surface : entry))
+              : current.surfaces;
+            return upsertSurface({ ...current, surfaces }, surface);
           }),
         ),
       openDevice: (ref, target, automatic = false) =>

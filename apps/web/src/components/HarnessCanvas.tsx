@@ -143,6 +143,7 @@ function deliveryBadgeVariant(
 
 function FlowAgentNode({ data, selected }: NodeProps<HarnessFlowNode>) {
   const { agent } = data;
+  const nativeBacking = agent.backing?.kind === "native" ? agent.backing : undefined;
   return (
     <div
       className={cn(
@@ -185,7 +186,11 @@ function FlowAgentNode({ data, selected }: NodeProps<HarnessFlowNode>) {
         type="button"
         className="nodrag nowheel flex w-full flex-col gap-1.5 p-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
         onClick={() => data.onSelect(agent)}
-        aria-label={`Open ${agent.title} chat`}
+        aria-label={
+          nativeBacking === undefined
+            ? `Open ${agent.title} chat`
+            : `Inspect ${agent.title} in its parent thread`
+        }
       >
         <span className="flex items-start justify-between gap-2">
           <span className="flex min-w-0 items-center gap-2">
@@ -223,6 +228,11 @@ function FlowAgentNode({ data, selected }: NodeProps<HarnessFlowNode>) {
             )}
             {deliveryStageLabels[agent.deliveryStage]}
           </Badge>
+          {nativeBacking !== undefined ? (
+            <Badge size="sm" variant="outline">
+              {nativeBacking.provider} native
+            </Badge>
+          ) : null}
         </span>
       </button>
 
@@ -258,6 +268,7 @@ function FlowAgentNode({ data, selected }: NodeProps<HarnessFlowNode>) {
         <Button
           size="icon-micro"
           variant="ghost-muted"
+          disabled={nativeBacking !== undefined}
           aria-label={`Create child agent under ${agent.title}`}
           onClick={() => data.onCreateChild(agent.id)}
         >
