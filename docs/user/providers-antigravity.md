@@ -100,10 +100,11 @@ mean this provider can use it.
 
 ### Subagents
 
-Antigravity groups subagent activity into batches. You cannot open or control
-individual subagents, and an idle batch does not confirm that every child
-succeeded. See [agent work](./thread-sidebar.md#inspect-agent-work) for where to
-inspect activity.
+Antigravity groups subagent activity into batches. You cannot open a native
+child as its own T3 thread or control it individually. Harness can show those
+children on the canvas and take you to the parent thread's Agents panel; an
+idle batch does not confirm that every child succeeded. See [agent work](./thread-sidebar.md#inspect-agent-work)
+for where to inspect activity.
 
 ## Accounts and removal
 

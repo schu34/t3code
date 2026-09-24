@@ -7,6 +7,8 @@ import {
   HarnessAgent,
   HarnessSendCoordinationMessageInput,
 } from "./harnessGraph.ts";
+import { ThreadId } from "./baseSchemas.ts";
+import { providerChildThreadId } from "./orchestration.ts";
 
 const decodeCanvasPosition = Schema.decodeUnknownSync(HarnessCanvasPosition);
 const decodeConvergenceRound = Schema.decodeUnknownSync(HarnessConvergenceRound);
@@ -49,6 +51,7 @@ describe("Harness graph contracts", () => {
       status: "active",
       backing: {
         kind: "native",
+        threadId: "harness-child:thread-1:child-1",
         provider: "codex",
         providerInstanceId: "codex",
         providerAgentId: "child-1",
@@ -62,5 +65,14 @@ describe("Harness graph contracts", () => {
 
     expect(agent.threadId).toBeUndefined();
     expect(agent.backing?.kind).toBe("native");
+    expect(agent.backing?.kind === "native" ? agent.backing.threadId : undefined).toBe(
+      "harness-child:thread-1:child-1",
+    );
+  });
+
+  it("derives one stable T3 transcript id for a provider child", () => {
+    expect(providerChildThreadId(ThreadId.make("thread-1"), "child-1")).toBe(
+      "harness-child:thread-1:child-1",
+    );
   });
 });

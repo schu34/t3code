@@ -91,6 +91,7 @@ import {
   HarnessGraphValidationError,
   HarnessRelationshipId,
   HARNESS_GRAPH_MAX_CONVERGENCE_ROUNDS,
+  providerChildThreadId,
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
@@ -2003,6 +2004,7 @@ const makeWsRpcLayer = (
           row.parent_thread_id !== null
             ? {
                 kind: "native" as const,
+                threadId: ThreadId.make(row.thread_id),
                 provider: row.provider_name ?? "native",
                 ...(row.provider_instance_id === null
                   ? {}
@@ -2022,7 +2024,10 @@ const makeWsRpcLayer = (
                   threadId: ThreadId.make(row.thread_id),
                 },
               }
-            : { backing: nativeBacking }),
+            : {
+                threadId: ThreadId.make(row.thread_id),
+                backing: nativeBacking,
+              }),
           projectId: ProjectId.make(row.project_id),
           displayName: row.display_name,
           role: row.role,
@@ -2222,6 +2227,7 @@ const makeWsRpcLayer = (
           );
           const existingNativeRows = yield* sql<{
             readonly agent_id: string;
+            readonly thread_id: string;
             readonly display_name: string;
             readonly status: "active" | "paused" | "completed" | "failed";
             readonly parent_agent_id: string | null;
@@ -2231,7 +2237,7 @@ const makeWsRpcLayer = (
             readonly parent_thread_id: string | null;
             readonly capabilities_json: string;
           }>`
-            SELECT agent_id, display_name, status, parent_agent_id, provider_name,
+            SELECT agent_id, thread_id, display_name, status, parent_agent_id, provider_name,
                    provider_instance_id, provider_agent_id, parent_thread_id, capabilities_json
             FROM harness_agents
             WHERE backing_kind = 'native'
@@ -2309,7 +2315,6 @@ const makeWsRpcLayer = (
             );
             const providerName = parentThread.session?.providerName ?? "native";
             const providerInstanceId = parentThread.session?.providerInstanceId ?? null;
-            const providerKey = providerInstanceId ?? providerName;
             for (const observation of observations) {
               const agentId = nativeAgentIdByProviderId.get(observation.providerAgentId);
               if (agentId === undefined) continue;
@@ -2320,7 +2325,10 @@ const makeWsRpcLayer = (
                 rootAgentId;
               nativeRows.push({
                 agentId,
-                storageThreadId: `native:${parentThreadId}:${providerKey}:${observation.providerAgentId}`,
+                storageThreadId: providerChildThreadId(
+                  ThreadId.make(parentThreadId),
+                  observation.providerAgentId,
+                ),
                 projectId: parentThread.projectId,
                 displayName: observation.title,
                 status: observation.status,
@@ -2340,6 +2348,7 @@ const makeWsRpcLayer = (
             const existing = existingNativeById.get(row.agentId);
             if (
               existing === undefined ||
+              existing.thread_id !== row.storageThreadId ||
               existing.display_name !== row.displayName ||
               existing.status !== row.status ||
               existing.parent_agent_id !== row.parentAgentId ||

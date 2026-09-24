@@ -1,5 +1,6 @@
 import type {
   EnvironmentId,
+  HarnessAgentId,
   OrchestrationProjectShell,
   OrchestrationThreadShell,
   ProjectId,
@@ -44,6 +45,21 @@ export interface HarnessCanvasPosition {
   readonly y: number;
 }
 
+export type HarnessCanvasAgentBacking =
+  | {
+      readonly kind: "thread";
+      readonly threadId: ThreadId;
+    }
+  | {
+      readonly kind: "native";
+      readonly serverAgentId: HarnessAgentId;
+      readonly threadId?: ThreadId;
+      readonly provider: string;
+      readonly providerAgentId: string;
+      readonly parentThreadId: ThreadId;
+      readonly capabilities: ReadonlyArray<"inspect">;
+    };
+
 export interface HarnessCanvasLayoutOptions {
   readonly columnWidth?: number;
   readonly rowHeight?: number;
@@ -56,7 +72,9 @@ export interface HarnessCanvasLayoutOptions {
 export interface HarnessCanvasAgent {
   readonly id: string;
   readonly environmentId: EnvironmentId;
-  readonly threadId: ThreadId;
+  readonly threadId?: ThreadId;
+  /** Optional while decoding snapshots produced before explicit backing. */
+  readonly backing?: HarnessCanvasAgentBacking;
   readonly draftId?: string;
   readonly projectId: ProjectId;
   readonly title: string;
@@ -178,6 +196,13 @@ export interface HarnessCanvasThreadLike {
 
 export function harnessAgentId(environmentId: EnvironmentId, threadId: ThreadId): string {
   return `${environmentId}\u0000${threadId}`;
+}
+
+export function harnessNativeAgentId(
+  environmentId: EnvironmentId,
+  agentId: HarnessAgentId,
+): string {
+  return `${environmentId}\u0000native\u0000${agentId}`;
 }
 
 export function deriveHarnessRuntimeState(thread: HarnessCanvasThreadLike): HarnessRuntimeState {
@@ -430,6 +455,7 @@ export function buildHarnessCanvasSnapshotFromThreads(
       id,
       environmentId: thread.environmentId,
       threadId: thread.id,
+      backing: { kind: "thread" as const, threadId: thread.id },
       projectId: thread.projectId,
       title: thread.title,
       projectTitle: project?.title ?? "Unknown project",

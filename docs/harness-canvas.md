@@ -1,8 +1,9 @@
 # Harness canvas design
 
 The Harness landing page is a graph view over the existing T3 Code thread
-surface. A node is an agent backed by a thread; edges describe delegation,
-side chats, or a coordination channel.
+surface. A node is either an agent backed by a T3 thread or a provider-native
+child observed inside one; edges describe delegation, side chats, or a
+coordination channel.
 
 ## Rough layout
 
@@ -28,8 +29,9 @@ side chats, or a coordination channel.
 
 ## Interaction rules
 
-- Click a node to open its normal full chat. Draft nodes reopen the draft
-  composer; persisted nodes use the regular thread route.
+- Click a T3-backed node to open its normal full chat. Draft nodes reopen the
+  draft composer; provider-native nodes open their parent thread's Agents panel
+  for inspection because they do not have an independent T3 thread.
 - Drag from a node handle, or use the connection selector, to create a
   relationship and a `Shared work` coordination channel.
 - Dragging a node saves its canvas position. Collapsing a node hides delegation
@@ -59,7 +61,9 @@ three rounds.
 
 ## Next slice
 
-The current slice owns the graph protocol and local Harness thread creation.
-Provider-specific fork adapters, automatic outbox workers, and worktree-aware
+The current slice owns the graph protocol, local Harness thread creation, and
+provider-native lifecycle projection. Native nodes are inspect-only and retain
+their provider identity instead of pretending to be T3 threads. Provider-
+specific control or fork adapters, automatic outbox workers, and worktree-aware
 agent execution can plug into the existing channel and delivery tables without
 changing the canvas contract.
