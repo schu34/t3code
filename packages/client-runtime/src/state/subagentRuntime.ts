@@ -142,6 +142,12 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
 function asCount(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
@@ -226,6 +232,7 @@ function mergeUsageMax(
 }
 
 interface MutableAgent {
+  source: "normalized" | "legacy";
   id: string;
   kind: RuntimeSubagent["kind"];
   title: string;
@@ -277,12 +284,17 @@ function getOrCreate(
   id: string,
   payload: Record<string, unknown>,
   at: string,
+  source: "normalized" | "legacy" = "normalized",
 ): MutableAgent {
   const existing = agents.get(id);
   if (existing) {
+    // Normalized task rows are the authoritative representation when a
+    // provider emits both the old collab item and the new task lifecycle.
+    if (source === "normalized") existing.source = "normalized";
     return existing;
   }
   const created: MutableAgent = {
+    source,
     id,
     kind: kindFromPayload(payload, id),
     title: asString(payload.title) ?? asString(payload.detail) ?? id,
@@ -449,6 +461,158 @@ function asRuntimeStatus(value: unknown): RuntimeSubagentStatus | undefined {
     : undefined;
 }
 
+function legacyCollabStatus(
+  value: unknown,
+  fallback: RuntimeSubagentStatus,
+): RuntimeSubagentStatus {
+  switch (value) {
+    case "pendingInit":
+    case "pending":
+      return "pending";
+    case "inProgress":
+    case "active":
+    case "running":
+      return "running";
+    case "waiting":
+    case "waitingOnApproval":
+    case "waitingOnUserInput":
+      return "waiting";
+    case "idle":
+      return "idle";
+    case "completed":
+      return "completed";
+    case "failed":
+    case "error":
+      return "failed";
+    case "cancelled":
+    case "canceled":
+      return "cancelled";
+    case "interrupted":
+    case "stopped":
+      return "interrupted";
+    default:
+      return fallback;
+  }
+}
+
+function legacyCollabItem(
+  activity: OrchestrationThreadActivity,
+): { payload: Record<string, unknown>; item: Record<string, unknown> } | null {
+  if (
+    activity.kind !== "tool.started" &&
+    activity.kind !== "tool.updated" &&
+    activity.kind !== "tool.completed"
+  ) {
+    return null;
+  }
+  if (typeof activity.payload !== "object" || activity.payload === null) return null;
+  const payload = activity.payload as Record<string, unknown>;
+  if (payload.itemType !== "collab_agent_tool_call") return null;
+  const data = asRecord(payload.data);
+  const item = asRecord(data?.item);
+  return item?.type === "collabAgentToolCall" ? { payload, item } : null;
+}
+
+function legacyCollabAgentIds(item: Record<string, unknown>): ReadonlyArray<string> {
+  const ids = new Set<string>();
+  if (Array.isArray(item.receiverThreadIds)) {
+    for (const value of item.receiverThreadIds) {
+      const id = asString(value);
+      if (id) ids.add(id);
+    }
+  }
+  const states = asRecord(item.agentsStates);
+  if (states) {
+    for (const id of Object.keys(states)) ids.add(id);
+  }
+  return [...ids];
+}
+
+type LegacyCollabMetadata = {
+  title?: string;
+  model?: string;
+  effort?: string;
+};
+
+function applyLegacyCollabActivity(
+  agents: Map<string, MutableAgent>,
+  activity: OrchestrationThreadActivity,
+  metadataByToolCallId: Map<string, LegacyCollabMetadata>,
+): void {
+  const parsed = legacyCollabItem(activity);
+  if (!parsed) return;
+
+  const { payload, item } = parsed;
+  const toolCallId = asString(payload.toolCallId) ?? asString(item.id);
+  const cachedMetadata = toolCallId ? metadataByToolCallId.get(toolCallId) : undefined;
+  const prompt = asString(item.prompt) ?? cachedMetadata?.title;
+  const model = asString(item.model) ?? cachedMetadata?.model;
+  const effort = asString(item.reasoningEffort) ?? cachedMetadata?.effort;
+  if (toolCallId && (prompt || model || effort)) {
+    const nextMetadata: LegacyCollabMetadata = { ...cachedMetadata };
+    if (prompt) nextMetadata.title = prompt;
+    if (model) nextMetadata.model = model;
+    if (effort) nextMetadata.effort = effort;
+    metadataByToolCallId.set(toolCallId, nextMetadata);
+  }
+  const tool = asString(item.tool);
+  const itemStatus = asString(item.status) ?? asString(payload.status);
+  const fallbackStatus: RuntimeSubagentStatus =
+    itemStatus === "failed" || itemStatus === "error"
+      ? "failed"
+      : tool === "closeAgent" &&
+          (itemStatus === "completed" || itemStatus === "cancelled" || itemStatus === "canceled")
+        ? legacyCollabStatus(itemStatus, "completed")
+        : activity.kind === "tool.started"
+          ? "pending"
+          : "running";
+  const states = asRecord(item.agentsStates);
+
+  for (const agentId of legacyCollabAgentIds(item)) {
+    const existing = agents.get(agentId);
+    if (existing?.source === "normalized") continue;
+    const state = asRecord(states?.[agentId]);
+    const status = legacyCollabStatus(state?.status, fallbackStatus);
+    const agent = getOrCreate(
+      agents,
+      agentId,
+      {
+        ...(prompt ? { title: prompt } : {}),
+        role: "provider-native",
+        ...(model ? { model } : {}),
+        ...(effort ? { effort } : {}),
+      },
+      activity.createdAt,
+      "legacy",
+    );
+    if (agent.source === "normalized") continue;
+
+    if (prompt) agent.title = bounded(prompt);
+    agent.role = agent.role ?? "provider-native";
+    if (model) agent.model = model;
+    if (effort) agent.effort = effort;
+    if (agent.activationCount === 0) {
+      agent.activationCount = 1;
+      agent.startedAt = activity.createdAt;
+    }
+    applyStatus(agent, status, activity.createdAt);
+
+    const message = asString(state?.message);
+    if (message) {
+      const boundedMessage = bounded(message);
+      if (status === "failed") {
+        agent.error = agent.error ?? boundedMessage;
+      } else if (isTerminalSubagentStatus(status)) {
+        agent.result = agent.result ?? boundedMessage;
+      } else {
+        agent.progress = boundedMessage;
+        agent.recentActivity = appendActivity(agent.recentActivity, activity.createdAt, message);
+      }
+    }
+    agent.updatedAt = activity.createdAt;
+  }
+}
+
 /**
  * Folds a thread's persisted activities into subagent state. Tolerant by
  * construction: malformed rows are skipped individually; unknown kinds are
@@ -465,6 +629,7 @@ export function foldSubagentActivities(
   options?: { readonly sessionLive?: boolean },
 ): ReadonlyArray<RuntimeSubagent> {
   const agents = new Map<string, MutableAgent>();
+  const legacyMetadataByToolCallId = new Map<string, LegacyCollabMetadata>();
 
   for (const activity of activities) {
     if (typeof activity.payload !== "object" || activity.payload === null) {
@@ -472,6 +637,11 @@ export function foldSubagentActivities(
     }
     const payload = activity.payload as Record<string, unknown>;
     const at = activity.createdAt;
+
+    // Codex versions that expose collaboration through the legacy tool item
+    // do not emit task.* rows. Fold their child roster before the normalized
+    // switch so the panel works across both wire formats.
+    applyLegacyCollabActivity(agents, activity, legacyMetadataByToolCallId);
 
     switch (activity.kind) {
       case "task.started": {
@@ -677,7 +847,7 @@ export function foldSubagentActivities(
       .slice(0, ROSTER_LIMIT);
   }
 
-  return roster.map((agent) => ({ ...agent }));
+  return roster.map(({ source: _source, ...agent }) => ({ ...agent }));
 }
 
 export interface AgentPanelWorkflowGroup {
