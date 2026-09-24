@@ -73,6 +73,8 @@ export function useNewThreadHandler() {
         envMode?: DraftThreadEnvMode;
         startFromOrigin?: boolean;
         replace?: boolean;
+        /** Create an independent draft instead of reusing the project's empty draft. */
+        reuseExistingDraft?: boolean;
       },
       // Which draft the thread ended up in, so a caller that has something to put in it — a
       // prepared checkout, a task to write — addresses that one rather than looking the project
@@ -173,27 +175,37 @@ export function useNewThreadHandler() {
       const hasWorktreePathOption = options?.worktreePath !== undefined;
       const hasEnvModeOption = options?.envMode !== undefined;
       const hasStartFromOriginOption = options?.startFromOrigin !== undefined;
+      const reuseExistingDraft = options?.reuseExistingDraft !== false;
       const storedDraftThread = getDraftSessionByLogicalProjectKey(logicalProjectKey);
       const storedDraftThreadRef = storedDraftThread
         ? scopeThreadRef(storedDraftThread.environmentId, storedDraftThread.threadId)
         : null;
       const reusableStoredDraftThread =
+        reuseExistingDraft &&
         storedDraftThread !== null &&
         storedDraftThread.promotedTo == null &&
+        storedDraftThread.retainWhenUnmapped !== true &&
         storedDraftThreadRef !== null &&
         readThreadShell(storedDraftThreadRef) === null
           ? storedDraftThread
           : null;
-      if (storedDraftThreadRef && reusableStoredDraftThread === null) {
+      if (
+        reuseExistingDraft &&
+        storedDraftThreadRef &&
+        storedDraftThread?.retainWhenUnmapped !== true &&
+        reusableStoredDraftThread === null
+      ) {
         markPromotedDraftThreadByRef(storedDraftThreadRef);
       }
       // New-thread surfaces (button, hotkeys, "/" landing, palette) only
       // ever reuse a draft the user has NOT invested in. A draft with typed
       // text or attachments is work in progress: it stays alive where it is
       // (reachable from the sidebar draft rows) and this request mints a
-      // fresh draft instead — the remap in the store preserves invested
-      // drafts rather than deleting them.
+      // fresh draft instead. Explicitly retained sessions belong to an
+      // external surface such as the Harness graph and are never reused by
+      // ordinary new-thread flows.
       const emptyStoredDraftThread =
+        reuseExistingDraft &&
         reusableStoredDraftThread &&
         !composerDraftHasUserContent(getComposerDraft(reusableStoredDraftThread.draftId))
           ? reusableStoredDraftThread
@@ -332,10 +344,12 @@ export function useNewThreadHandler() {
       }
 
       if (
+        reuseExistingDraft &&
         latestActiveDraftThread &&
         currentRouteTarget?.kind === "draft" &&
         latestActiveDraftThread.logicalProjectKey === logicalProjectKey &&
         latestActiveDraftThread.promotedTo == null &&
+        latestActiveDraftThread.retainWhenUnmapped !== true &&
         // Same content rule as above: a new-thread request while viewing an
         // invested draft mints a fresh one instead of repurposing it.
         !composerDraftHasUserContent(getComposerDraft(currentRouteTarget.draftId))
@@ -375,6 +389,7 @@ export function useNewThreadHandler() {
         // reuse the winner instead, like the synchronous path above does.
         const racedDraft = getDraftSessionByLogicalProjectKey(logicalProjectKey);
         if (
+          reuseExistingDraft &&
           racedDraft &&
           // Only a draft REGISTERED during the await counts as a raced
           // winner. An invested draft this invocation deliberately declined
@@ -418,6 +433,7 @@ export function useNewThreadHandler() {
               newWorktreesStartFromOrigin: projectSettings.settings.newWorktreesStartFromOrigin,
             }),
           runtimeMode: defaultRuntimeMode,
+          retainWhenUnmapped: !reuseExistingDraft,
           ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
         });
         applyStickyState(draftId);

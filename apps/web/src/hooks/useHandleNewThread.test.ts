@@ -15,6 +15,7 @@ const testState = vi.hoisted(() => {
     readonly environmentId: string;
     readonly promotedTo: null;
     readonly threadId: string;
+    readonly retainWhenUnmapped?: boolean;
   } | null = null;
   const router = {
     state: {
@@ -224,6 +225,63 @@ describe.each([
     expect(testState.router.state.location.href).toBe("/usage");
     expect(testState.router.navigate).not.toHaveBeenCalled();
     expect(testState.draftStore.setLogicalProjectDraftThreadId).not.toHaveBeenCalled();
+  });
+
+  it("mints an independent retained draft when reuse is disabled", async () => {
+    testState.reset({
+      draftId: "draft-existing",
+      environmentId: "environment-ssh",
+      promotedTo: null,
+      threadId: "thread-existing",
+    });
+    const projectRef = {
+      environmentId: "environment-ssh",
+      projectId: "project-remote",
+    } as never;
+    const openThread = useNewThreadHandler();
+    const pendingOpen = openThread(projectRef, { reuseExistingDraft: false });
+
+    testState.completeProjectFileRead(null);
+    const opened = await pendingOpen;
+
+    expect(opened).toEqual({ draftId: "draft-delayed", threadId: "thread-delayed" });
+    expect(testState.draftStore.setLogicalProjectDraftThreadId).toHaveBeenCalledWith(
+      "remote-project",
+      projectRef,
+      "draft-delayed",
+      expect.objectContaining({
+        threadId: "thread-delayed",
+        retainWhenUnmapped: true,
+      }),
+    );
+    expect(testState.draftStore.setDraftThreadContext).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse a retained draft for a normal new thread", async () => {
+    testState.reset({
+      draftId: "draft-existing",
+      environmentId: "environment-ssh",
+      promotedTo: null,
+      threadId: "thread-existing",
+      retainWhenUnmapped: true,
+    });
+    const projectRef = {
+      environmentId: "environment-ssh",
+      projectId: "project-remote",
+    } as never;
+    const openThread = useNewThreadHandler();
+    const pendingOpen = openThread(projectRef);
+
+    testState.completeProjectFileRead(null);
+    const opened = await pendingOpen;
+
+    expect(opened).toEqual({ draftId: "draft-delayed", threadId: "thread-delayed" });
+    expect(testState.draftStore.setLogicalProjectDraftThreadId).toHaveBeenCalledWith(
+      "remote-project",
+      projectRef,
+      "draft-delayed",
+      expect.objectContaining({ retainWhenUnmapped: false }),
+    );
   });
 
   it.each([true, false])(
