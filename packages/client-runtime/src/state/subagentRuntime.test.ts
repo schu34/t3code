@@ -57,6 +57,16 @@ function legacyActivity(
   } as unknown as OrchestrationThreadActivity;
 }
 
+function legacyCollabActivity(
+  kind: string,
+  item: Record<string, unknown>,
+): OrchestrationThreadActivity {
+  return legacyActivity(kind, {
+    itemType: "collab_agent_tool_call",
+    data: { item: { type: "collabAgentToolCall", ...item } },
+  });
+}
+
 function fold(rows: ReadonlyArray<OrchestrationThreadActivity>) {
   return foldSubagentActivities(rows);
 }
@@ -143,6 +153,47 @@ describe("foldSubagentActivities", () => {
     expect(agents).toHaveLength(1);
     expect(agents[0]!.title).toBe("Recovered agent");
     expect(agents[0]!.status).toBe("running");
+  });
+
+  it("folds legacy Codex collaboration items into the agent roster", () => {
+    const agents = fold([
+      legacyCollabActivity("tool.started", {
+        id: "tool-call-1",
+        tool: "spawnAgent",
+        prompt: "Audit the auth flow",
+        model: "gpt-5.6-luna",
+        reasoningEffort: "max",
+      }),
+      legacyCollabActivity("tool.completed", {
+        id: "tool-call-1",
+        tool: "spawnAgent",
+        status: "completed",
+        prompt: "Audit the auth flow",
+        receiverThreadIds: ["child-1"],
+        agentsStates: { "child-1": { status: "pendingInit" } },
+      }),
+      legacyCollabActivity("tool.completed", {
+        id: "tool-call-1",
+        tool: "wait",
+        status: "completed",
+        receiverThreadIds: ["child-1"],
+        agentsStates: {
+          "child-1": { status: "completed", message: "Found the auth regression." },
+        },
+      }),
+    ]);
+
+    expect(agents).toHaveLength(1);
+    expect(agents[0]).toMatchObject({
+      id: "child-1",
+      kind: "subagent",
+      title: "Audit the auth flow",
+      role: "provider-native",
+      model: "gpt-5.6-luna",
+      effort: "max",
+      status: "completed",
+      result: "Found the auth regression.",
+    });
   });
 
   it("completion before start stays terminal; a late start only fills metadata", () => {

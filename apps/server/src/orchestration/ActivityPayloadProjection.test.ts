@@ -227,6 +227,51 @@ describe("projectActivityPayload", () => {
     expect(JSON.stringify(projected.payload).length).toBeLessThan(500);
   });
 
+  it("preserves the bounded child roster for legacy Codex collaboration items", () => {
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "collab_agent_tool_call",
+        data: {
+          item: {
+            type: "collabAgentToolCall",
+            id: "spawn-1",
+            tool: "spawnAgent",
+            model: "gpt-5.6-luna",
+            reasoningEffort: "max",
+            prompt: "Investigate the failing test",
+            receiverThreadIds: ["child-1"],
+            agentsStates: {
+              "child-1": {
+                status: "inProgress",
+                message: `Reading files\n${"x".repeat(5_000)}`,
+                internalState: { shouldNot: "cross the wire" },
+              },
+            },
+            internalState: { shouldNot: "cross the wire" },
+          },
+        },
+      }),
+    );
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+    const item = data.item as Record<string, unknown>;
+    expect(item).toMatchObject({
+      type: "collabAgentToolCall",
+      tool: "spawnAgent",
+      prompt: "Investigate the failing test",
+      receiverThreadIds: ["child-1"],
+      agentsStates: {
+        "child-1": { status: "inProgress" },
+      },
+    });
+    expect(
+      (item.agentsStates as Record<string, Record<string, string>>)["child-1"]!.message,
+    ).toHaveLength(4_000);
+    expect(item.internalState).toBeUndefined();
+    expect(
+      (item.agentsStates as Record<string, Record<string, unknown>>)["child-1"]!.internalState,
+    ).toBeUndefined();
+  });
+
   it("slims Claude-shaped mcp_tool_call data (toolName/input/result block)", () => {
     const projected = projectActivityPayload(
       activity({

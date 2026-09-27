@@ -128,6 +128,76 @@ function projectCommandData(data: Record<string, unknown>): Record<string, unkno
   return Object.keys(projectedItem).length > 0 ? projectedItem : undefined;
 }
 
+const COLLAB_AGENT_PROMPT_LIMIT = 2_000;
+const COLLAB_AGENT_MESSAGE_LIMIT = 4_000;
+const COLLAB_AGENT_STATE_LIMIT = 100;
+
+function boundedProjectionText(value: unknown, limit: number): string | undefined {
+  const text = asTrimmedString(value);
+  if (!text) return undefined;
+  return text.length <= limit ? text : `${text.slice(0, limit - 1).trimEnd()}…`;
+}
+
+/**
+ * The legacy Codex collaboration item is the only provider activity whose
+ * child roster lives inside data.item rather than in the top-level payload.
+ * Keep the small identity/status slice needed by the Agents panel while still
+ * dropping provider internals and bounding returned child messages.
+ */
+function projectCollabAgentData(
+  data: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const item = asRecord(data.item);
+  if (item?.type !== "collabAgentToolCall") return undefined;
+
+  const projectedItem: Record<string, unknown> = { type: item.type };
+  for (const key of [
+    "id",
+    "tool",
+    "status",
+    "model",
+    "reasoningEffort",
+    "senderThreadId",
+    "agentPath",
+    "role",
+  ]) {
+    if (item[key] !== undefined) projectedItem[key] = item[key];
+  }
+
+  const prompt = boundedProjectionText(item.prompt, COLLAB_AGENT_PROMPT_LIMIT);
+  if (prompt) projectedItem.prompt = prompt;
+
+  if (Array.isArray(item.receiverThreadIds)) {
+    const receiverThreadIds = item.receiverThreadIds
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .slice(0, COLLAB_AGENT_STATE_LIMIT);
+    if (receiverThreadIds.length > 0) projectedItem.receiverThreadIds = receiverThreadIds;
+  }
+
+  const states = asRecord(item.agentsStates);
+  if (states) {
+    const projectedStates: Record<string, Record<string, string>> = {};
+    for (const [agentId, rawState] of Object.entries(states).slice(0, COLLAB_AGENT_STATE_LIMIT)) {
+      const state = asRecord(rawState);
+      if (!state) continue;
+      const projectedState: Record<string, string> = {};
+      if (typeof state.status === "string" && state.status.trim().length > 0) {
+        projectedState.status = state.status;
+      }
+      const message = boundedProjectionText(state.message, COLLAB_AGENT_MESSAGE_LIMIT);
+      if (message) projectedState.message = message;
+      if (Object.keys(projectedState).length > 0) {
+        projectedStates[agentId] = projectedState;
+      }
+    }
+    if (Object.keys(projectedStates).length > 0) {
+      projectedItem.agentsStates = projectedStates;
+    }
+  }
+
+  return projectedItem;
+}
+
 function projectCommandValue(data: Record<string, unknown>): unknown {
   if (data.command !== undefined) {
     return data.command;
@@ -453,7 +523,10 @@ export function projectActivityPayload(
   }
 
   const projectedData: Record<string, unknown> = { ...questionInput };
-  const item = projectCommandData(data);
+  const item =
+    payload.itemType === "collab_agent_tool_call"
+      ? projectCollabAgentData(data)
+      : projectCommandData(data);
   if (item) {
     projectedData.item = item;
   }
