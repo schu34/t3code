@@ -116,6 +116,12 @@ export function applyThreadDetailEvent(
         thread: {
           id: event.payload.threadId,
           projectId: event.payload.projectId,
+          ...(event.payload.threadKind !== undefined
+            ? { threadKind: event.payload.threadKind }
+            : {}),
+          ...(event.payload.parentThreadId !== undefined
+            ? { parentThreadId: event.payload.parentThreadId }
+            : {}),
           title: event.payload.title,
           modelSelection: event.payload.modelSelection,
           runtimeMode: event.payload.runtimeMode,

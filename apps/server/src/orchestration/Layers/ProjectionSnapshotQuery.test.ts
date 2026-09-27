@@ -110,6 +110,60 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("keeps provider child threads out of the shell while serving their detail", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const modelSelection = JSON.stringify({ instanceId: "codex", model: "gpt-5.4" });
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, scripts_json, created_at, updated_at
+        )
+        VALUES (
+          'provider-child-project', 'Provider child project', '/tmp/provider-child', '[]',
+          '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z'
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, thread_kind, parent_thread_id, title,
+          model_selection_json, runtime_mode, interaction_mode, created_at, updated_at
+        )
+        VALUES
+          (
+            'provider-parent', 'provider-child-project', 'user', NULL, 'Parent',
+            ${modelSelection}, 'full-access', 'default',
+            '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z'
+          ),
+          (
+            'provider-child', 'provider-child-project', 'provider-child', 'provider-parent', 'Child',
+            ${modelSelection}, 'full-access', 'default',
+            '2026-09-01T00:00:01.000Z', '2026-09-01T00:00:01.000Z'
+          )
+      `;
+
+      const shell = yield* snapshotQuery.getShellSnapshot();
+      assert.deepStrictEqual(
+        shell.threads.map((thread) => thread.id),
+        [ThreadId.make("provider-parent")],
+      );
+
+      const childDetail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("provider-child"));
+      assert.equal(childDetail._tag, "Some");
+      if (childDetail._tag === "Some") {
+        assert.equal(childDetail.value.threadKind, "provider-child");
+        assert.equal(childDetail.value.parentThreadId, ThreadId.make("provider-parent"));
+      }
+
+      const childShell = yield* snapshotQuery.getThreadShellById(ThreadId.make("provider-child"));
+      assert.equal(childShell._tag, "None");
+
+      yield* sql`DELETE FROM projection_threads WHERE project_id = 'provider-child-project'`;
+      yield* sql`DELETE FROM projection_projects WHERE project_id = 'provider-child-project'`;
+    }),
+  );
+
   it.effect("hydrates read model from projection tables and computes snapshot sequence", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;

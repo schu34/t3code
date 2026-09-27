@@ -29,7 +29,9 @@ import {
   type TurnTokenUsage,
   ProviderApprovalDecision,
   ThreadId,
+  TurnId,
   ProviderSendTurnInput,
+  providerChildThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as NodeCrypto from "node:crypto";
@@ -1058,6 +1060,20 @@ function mapCollabAgentEvent(
     return [];
   }
   const base = runtimeEventBase(event, canonicalThreadId);
+  const childThreadId = providerChildThreadId(canonicalThreadId, agentThreadId);
+  const childBase = (childTurnId: unknown) => ({
+    ...base,
+    threadId: childThreadId,
+    ...(typeof childTurnId === "string"
+      ? {
+          turnId: TurnId.make(childTurnId),
+          providerRefs: {
+            ...base.providerRefs,
+            providerTurnId: childTurnId,
+          },
+        }
+      : {}),
+  });
   const taskId = RuntimeTaskId.make(agentThreadId);
   const agentPath = typeof payload.agentPath === "string" ? payload.agentPath : undefined;
   const pathLeaf = agentPath?.split("/").findLast((segment) => segment.length > 0);
@@ -1148,7 +1164,37 @@ function mapCollabAgentEvent(
           type: "task.updated",
           payload: { taskId, status: "running", ...linkage },
         },
+        {
+          ...childBase(payload.childTurnId),
+          type: "turn.started",
+          payload: {
+            ...(model ? { model } : {}),
+            ...(effort ? { effort } : {}),
+          },
+        },
       ];
+    case "collabAgent/outputDelta": {
+      const streamKind =
+        payload.streamKind === "assistant_text" ||
+        payload.streamKind === "reasoning_text" ||
+        payload.streamKind === "reasoning_summary_text"
+          ? payload.streamKind
+          : undefined;
+      const delta = typeof payload.delta === "string" ? payload.delta : event.textDelta;
+      if (streamKind === undefined || !delta || delta.length === 0) {
+        return [];
+      }
+      return [
+        {
+          ...childBase(payload.childTurnId),
+          type: "content.delta",
+          payload: {
+            streamKind,
+            delta,
+          },
+        },
+      ];
+    }
     case "collabAgent/turnCompleted": {
       // Idle, not terminal: the identity is resumable via sendInput/resume.
       const turn =
@@ -1162,11 +1208,31 @@ function mapCollabAgentEvent(
           : turnStatus === "interrupted"
             ? ("interrupted" as const)
             : ("idle" as const);
+      const childTurnId = typeof turn?.id === "string" ? turn.id : payload.childTurnId;
+      const childState =
+        turnStatus === "failed"
+          ? ("failed" as const)
+          : turnStatus === "interrupted"
+            ? ("interrupted" as const)
+            : ("completed" as const);
       return [
         {
           ...base,
           type: "task.updated",
           payload: { taskId, status, ...linkage },
+        },
+        {
+          ...childBase(childTurnId),
+          type: "turn.completed",
+          payload: {
+            state: childState,
+            ...(turnStatus === "failed" &&
+            typeof turn?.error === "object" &&
+            turn.error !== null &&
+            typeof (turn.error as Record<string, unknown>).message === "string"
+              ? { errorMessage: (turn.error as Record<string, unknown>).message as string }
+              : {}),
+          },
         },
       ];
     }

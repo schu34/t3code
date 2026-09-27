@@ -36,6 +36,49 @@ const projectionRepositoriesLayer = it.layer(
 );
 
 projectionRepositoriesLayer("Projection repositories", (it) => {
+  it.effect("round-trips provider child thread metadata", () =>
+    Effect.gen(function* () {
+      const threads = yield* ProjectionThreadRepository;
+      const threadId = ThreadId.make("thread-provider-child");
+      const parentThreadId = ThreadId.make("thread-provider-parent");
+
+      yield* threads.upsert({
+        threadId,
+        projectId: ProjectId.make("project-provider-child"),
+        threadKind: "provider-child",
+        parentThreadId,
+        title: "Provider child",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.4",
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        latestTurnId: null,
+        createdAt: "2026-09-01T00:00:00.000Z",
+        updatedAt: "2026-09-01T00:00:00.000Z",
+        archivedAt: null,
+        settledOverride: null,
+        settledAt: null,
+        unsettledAt: null,
+        snoozedUntil: null,
+        snoozedAt: null,
+        pinnedAt: null,
+        latestUserMessageAt: null,
+        pendingApprovalCount: 0,
+        pendingUserInputCount: 0,
+        hasActionableProposedPlan: 0,
+        deletedAt: null,
+      });
+
+      const persisted = yield* threads.getById({ threadId });
+      assert.deepStrictEqual(Option.getOrNull(persisted)?.threadKind, "provider-child");
+      assert.deepStrictEqual(Option.getOrNull(persisted)?.parentThreadId, parentThreadId);
+    }),
+  );
+
   it.effect("selects the latest-turn plan before checking implementation status", () =>
     Effect.gen(function* () {
       const plans = yield* ProjectionThreadProposedPlanRepository;

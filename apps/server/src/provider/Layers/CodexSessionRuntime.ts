@@ -1090,14 +1090,14 @@ const CHILD_AGENT_EVENT_METHODS: ReadonlySet<string> = new Set([
   "model/rerouted",
   "item/started",
   "item/completed",
+  "item/agentMessage/delta",
+  "item/reasoning/textDelta",
+  "item/reasoning/summaryTextDelta",
   "thread/closed",
   "error",
 ]);
 
 const CHILD_CHATTER_METHODS: ReadonlySet<string> = new Set([
-  "item/agentMessage/delta",
-  "item/reasoning/textDelta",
-  "item/reasoning/summaryTextDelta",
   "item/reasoning/summaryPartAdded",
   "item/commandExecution/outputDelta",
   "item/fileChange/outputDelta",
@@ -1745,7 +1745,41 @@ export const makeCodexSessionRuntime = (
               threadId: options.threadId,
               ...(child.spawnTurnId ? { turnId: child.spawnTurnId } : {}),
               method: "collabAgent/turnStarted",
-              payload: childIdentity,
+              payload: {
+                ...childIdentity,
+                ...(childTurnId ? { childTurnId } : {}),
+              },
+            });
+            return true;
+          }
+          case "item/agentMessage/delta":
+          case "item/reasoning/textDelta":
+          case "item/reasoning/summaryTextDelta": {
+            const route = readRouteFields(notification);
+            const delta = (notification.params as { readonly delta?: unknown }).delta;
+            if (typeof delta !== "string" || delta.length === 0) {
+              return true;
+            }
+            const streamKind =
+              notification.method === "item/agentMessage/delta"
+                ? "assistant_text"
+                : notification.method === "item/reasoning/textDelta"
+                  ? "reasoning_text"
+                  : "reasoning_summary_text";
+            yield* emitEvent({
+              kind: "notification",
+              threadId: options.threadId,
+              ...(child.spawnTurnId ? { turnId: child.spawnTurnId } : {}),
+              ...(route.itemId ? { itemId: route.itemId } : {}),
+              method: "collabAgent/outputDelta",
+              payload: {
+                ...childIdentity,
+                ...(route.turnId ? { childTurnId: route.turnId } : {}),
+                ...(route.itemId ? { childItemId: route.itemId } : {}),
+                streamKind,
+                delta,
+              },
+              textDelta: delta,
             });
             return true;
           }

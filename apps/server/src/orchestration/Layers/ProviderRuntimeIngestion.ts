@@ -18,6 +18,8 @@ import {
   type ProviderRuntimeEvent,
   type ResponseStreamingMode,
   RuntimeRequestId,
+  TrimmedNonEmptyString,
+  providerChildThreadId,
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
@@ -1091,6 +1093,9 @@ const make = Effect.gen(function* () {
     timeToLive: TASK_DESCRIPTION_BY_TASK_TTL,
     lookup: () => Effect.succeed(""),
   });
+  // Child creation is idempotent across restarts, but task progress can be
+  // frequent. Avoid re-reading a full child detail snapshot for every patch.
+  const ensuredProviderChildThreads = new Set<string>();
 
   const rememberTaskDescription = (threadId: ThreadId, taskId: string, description: string) =>
     Cache.set(taskDescriptionByTaskKey, providerTaskKey(threadId, taskId), description);
@@ -1111,6 +1116,49 @@ const make = Effect.gen(function* () {
     return yield* projectionSnapshotQuery
       .getThreadRuntimeContext(threadId)
       .pipe(Effect.map(Option.getOrUndefined));
+  });
+
+  const ensureProviderChildThread = Effect.fn("ensureProviderChildThread")(function* (
+    event: ProviderRuntimeEvent,
+    parentThreadId: ThreadId,
+    providerAgentId: string,
+    title: string | undefined,
+  ) {
+    const childThreadId = providerChildThreadId(parentThreadId, providerAgentId);
+    if (ensuredProviderChildThreads.has(childThreadId)) {
+      return childThreadId;
+    }
+    const existing = yield* projectionSnapshotQuery.getThreadDetailById(childThreadId);
+    if (Option.isSome(existing)) {
+      ensuredProviderChildThreads.add(childThreadId);
+      return childThreadId;
+    }
+
+    const parent = yield* projectionSnapshotQuery.getThreadDetailById(parentThreadId);
+    if (Option.isNone(parent)) {
+      return childThreadId;
+    }
+
+    const childTitle = TrimmedNonEmptyString.make(
+      title?.trim() || `Provider child ${providerAgentId.slice(0, 12)}`,
+    );
+    yield* orchestrationEngine.dispatch({
+      type: "thread.create",
+      commandId: yield* providerCommandId(event, "provider-child-thread-create"),
+      threadId: childThreadId,
+      projectId: parent.value.projectId,
+      threadKind: "provider-child",
+      parentThreadId,
+      title: childTitle,
+      modelSelection: parent.value.modelSelection,
+      runtimeMode: parent.value.runtimeMode,
+      interactionMode: parent.value.interactionMode,
+      branch: parent.value.branch,
+      worktreePath: parent.value.worktreePath,
+      createdAt: event.createdAt,
+    });
+    ensuredProviderChildThreads.add(childThreadId);
+    return childThreadId;
   });
 
   const getThreadMessageById = Effect.fn("getThreadMessageById")(function* (
@@ -1768,6 +1816,30 @@ const make = Effect.gen(function* () {
 
       const thread = yield* resolveThreadRuntimeContext(event.threadId);
       if (!thread) return;
+
+      const providerChildAgentId =
+        event.raw?.method?.startsWith("collabAgent/") === true &&
+        (event.type === "task.started" ||
+          event.type === "task.progress" ||
+          event.type === "task.updated" ||
+          event.type === "task.completed")
+          ? event.payload.taskId
+          : undefined;
+      if (providerChildAgentId !== undefined) {
+        const childTitle = (() => {
+          switch (event.type) {
+            case "task.started":
+            case "task.progress":
+            case "task.updated":
+              return event.payload.description;
+            case "task.completed":
+              return event.payload.summary;
+            default:
+              return undefined;
+          }
+        })();
+        yield* ensureProviderChildThread(event, thread.id, providerChildAgentId, childTitle);
+      }
 
       const now = event.createdAt;
       const eventTurnId = toTurnId(event.turnId);

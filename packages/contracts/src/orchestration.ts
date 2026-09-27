@@ -770,9 +770,21 @@ export const ThreadPullRequestLink = Schema.Struct({
 });
 export type ThreadPullRequestLink = typeof ThreadPullRequestLink.Type;
 
+/** A provider-owned child is a real T3 thread, but stays out of the thread shell. */
+export const OrchestrationThreadKind = Schema.Literals(["user", "provider-child"]);
+export type OrchestrationThreadKind = typeof OrchestrationThreadKind.Type;
+
+/** Stable address for a provider-owned child conversation linked to a parent thread. */
+export function providerChildThreadId(parentThreadId: ThreadId, providerAgentId: string): ThreadId {
+  return ThreadId.make(`harness-child:${parentThreadId}:${providerAgentId}`);
+}
+
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
+  // Optional so ordinary threads and events from older servers remain compact.
+  threadKind: Schema.optional(OrchestrationThreadKind),
+  parentThreadId: Schema.optional(ThreadId),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -1096,6 +1108,8 @@ const ThreadCreateCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   projectId: ProjectId,
+  threadKind: Schema.optional(OrchestrationThreadKind),
+  parentThreadId: Schema.optional(ThreadId),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -1728,6 +1742,9 @@ export const ProjectDeletedPayload = Schema.Struct({
 export const ThreadCreatedPayload = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
+  // Optional so events persisted before provider child threads decode unchanged.
+  threadKind: Schema.optional(OrchestrationThreadKind),
+  parentThreadId: Schema.optional(ThreadId),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),

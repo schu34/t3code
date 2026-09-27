@@ -566,6 +566,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
+          thread_kind AS "threadKind",
+          parent_thread_id AS "parentThreadId",
           title,
           title_state_json AS "titleState",
           model_selection_json AS "modelSelection",
@@ -607,6 +609,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
+          thread_kind AS "threadKind",
+          parent_thread_id AS "parentThreadId",
           title,
           title_state_json AS "titleState",
           model_selection_json AS "modelSelection",
@@ -638,6 +642,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         FROM projection_threads
         WHERE deleted_at IS NULL
           AND archived_at IS NULL
+          AND COALESCE(thread_kind, 'user') = 'user'
         ORDER BY project_id ASC, created_at ASC, thread_id ASC
       `,
   });
@@ -658,7 +663,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         t.deleted_at AS "deletedAt"
       FROM projection_threads t
       JOIN projection_projects p ON p.project_id = t.project_id
-      WHERE t.deleted_at IS NOT NULL AND t.worktree_path IS NOT NULL AND t.branch IS NOT NULL
+      WHERE t.deleted_at IS NOT NULL
+        AND t.worktree_path IS NOT NULL
+        AND t.branch IS NOT NULL
+        AND COALESCE(t.thread_kind, 'user') = 'user'
       ORDER BY t.deleted_at DESC, t.thread_id ASC
     `,
   });
@@ -680,6 +688,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
+          thread_kind AS "threadKind",
+          parent_thread_id AS "parentThreadId",
           title,
           title_state_json AS "titleState",
           model_selection_json AS "modelSelection",
@@ -711,6 +721,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         FROM projection_threads
         WHERE deleted_at IS NULL
           AND archived_at IS NOT NULL
+          AND COALESCE(thread_kind, 'user') = 'user'
         ORDER BY project_id ASC, archived_at DESC, thread_id DESC
       `,
   });
@@ -795,6 +806,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           ON threads.thread_id = links.thread_id
         WHERE threads.deleted_at IS NULL
           AND threads.archived_at IS NULL
+          AND COALESCE(threads.thread_kind, 'user') = 'user'
         ORDER BY links.thread_id ASC, links.linked_at ASC, links.number ASC
       `,
   });
@@ -819,6 +831,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           ON threads.thread_id = links.thread_id
         WHERE threads.deleted_at IS NULL
           AND threads.archived_at IS NOT NULL
+          AND COALESCE(threads.thread_kind, 'user') = 'user'
         ORDER BY links.thread_id ASC, links.linked_at ASC, links.number ASC
       `,
   });
@@ -889,6 +902,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           ON threads.thread_id = sessions.thread_id
         WHERE threads.deleted_at IS NULL
           AND threads.archived_at IS NULL
+          AND COALESCE(threads.thread_kind, 'user') = 'user'
         ORDER BY sessions.thread_id ASC
       `,
   });
@@ -914,6 +928,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           ON threads.thread_id = sessions.thread_id
         WHERE threads.deleted_at IS NULL
           AND threads.archived_at IS NOT NULL
+          AND COALESCE(threads.thread_kind, 'user') = 'user'
         ORDER BY sessions.thread_id ASC
       `,
   });
@@ -984,6 +999,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         WHERE threads.deleted_at IS NULL
           AND threads.archived_at IS NULL
           AND threads.latest_turn_id IS NOT NULL
+          AND COALESCE(threads.thread_kind, 'user') = 'user'
         ORDER BY turns.thread_id ASC
       `,
   });
@@ -1010,6 +1026,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         WHERE threads.deleted_at IS NULL
           AND threads.archived_at IS NOT NULL
           AND threads.latest_turn_id IS NOT NULL
+          AND COALESCE(threads.thread_kind, 'user') = 'user'
         ORDER BY turns.thread_id ASC
       `,
   });
@@ -1089,6 +1106,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             ON projects.project_id = threads.project_id
           WHERE threads.deleted_at IS NULL
             AND threads.archived_at IS NULL
+            AND COALESCE(threads.thread_kind, 'user') = 'user'
             AND projects.deleted_at IS NULL
             AND messages.is_streaming = 0
             -- Only these two roles are searchable, and the CASE above depends
@@ -1186,6 +1204,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         WHERE project_id = ${projectId}
           AND deleted_at IS NULL
           AND archived_at IS NULL
+          AND COALESCE(thread_kind, 'user') = 'user'
         ORDER BY created_at ASC, thread_id ASC
         LIMIT 1
       `,
@@ -1207,6 +1226,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         WHERE threads.project_id = ${projectId}
           AND threads.deleted_at IS NULL
           AND threads.archived_at IS NULL
+          AND COALESCE(threads.thread_kind, 'user') = 'user'
           AND projects.deleted_at IS NULL
           AND EXISTS (
             SELECT 1
@@ -1245,6 +1265,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
+          thread_kind AS "threadKind",
+          parent_thread_id AS "parentThreadId",
           title,
           title_state_json AS "titleState",
           model_selection_json AS "modelSelection",
@@ -2317,6 +2339,10 @@ pending_approval_requests AS (
               const threads: ReadonlyArray<OrchestrationThread> = threadRows.map((row) => ({
                 id: row.threadId,
                 projectId: row.projectId,
+                ...(row.threadKind === "provider-child" ? { threadKind: row.threadKind } : {}),
+                ...(row.parentThreadId === null || row.parentThreadId === undefined
+                  ? {}
+                  : { parentThreadId: row.parentThreadId }),
                 title: row.title,
                 modelSelection: row.modelSelection,
                 runtimeMode: row.runtimeMode,
@@ -2562,6 +2588,10 @@ pending_approval_requests AS (
                 threads.push({
                   id: row.threadId,
                   projectId: row.projectId,
+                  ...(row.threadKind === "provider-child" ? { threadKind: row.threadKind } : {}),
+                  ...(row.parentThreadId === null || row.parentThreadId === undefined
+                    ? {}
+                    : { parentThreadId: row.parentThreadId }),
                   title: row.title,
                   modelSelection: row.modelSelection,
                   runtimeMode: row.runtimeMode,
@@ -3230,6 +3260,9 @@ pending_approval_requests AS (
       if (Option.isNone(threadRow)) {
         return Option.none<OrchestrationThreadShell>();
       }
+      if (threadRow.value.threadKind === "provider-child") {
+        return Option.none<OrchestrationThreadShell>();
+      }
 
       return Option.some({
         id: threadRow.value.threadId,
@@ -3535,6 +3568,12 @@ pending_approval_requests AS (
       const thread = {
         id: threadRow.value.threadId,
         projectId: threadRow.value.projectId,
+        ...(threadRow.value.threadKind === "provider-child"
+          ? { threadKind: threadRow.value.threadKind }
+          : {}),
+        ...(threadRow.value.parentThreadId === null || threadRow.value.parentThreadId === undefined
+          ? {}
+          : { parentThreadId: threadRow.value.parentThreadId }),
         title: threadRow.value.title,
         modelSelection: threadRow.value.modelSelection,
         runtimeMode: threadRow.value.runtimeMode,
