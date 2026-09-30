@@ -28,12 +28,14 @@ side chats, or a coordination channel.
 
 ## Interaction rules
 
-- Click a node to open its normal full chat. Draft nodes reopen the draft
-  composer; persisted nodes use the regular thread route.
+- Click a node to open its backing thread or provider child panel. Draft nodes
+  reopen the draft composer; persisted thread-backed nodes use the regular
+  thread route.
 - Drag from a node handle, or use the connection selector, to create a
   relationship and a `Shared work` coordination channel.
-- Dragging a node saves its canvas position. Collapsing a node hides delegation
-  descendants while leaving connected peers visible.
+- Dragging a node changes its position for the current canvas session only;
+  positions reset when the canvas is reopened. Collapsing a node hides
+  delegation descendants while leaving connected peers visible.
 - Each node shows two independent badges: execution (`Working`, `Blocked`,
   `Waiting`, and so on) and delivery (`PR open`, `In review`, `Merged`).
 - Selecting a coordination edge opens the channel drawer. The drawer reads the
@@ -46,16 +48,19 @@ side chats, or a coordination channel.
 erDiagram
   HARNESS_AGENTS ||--o{ HARNESS_RELATIONSHIPS : source
   HARNESS_AGENTS ||--o{ HARNESS_RELATIONSHIPS : target
+  HARNESS_ROLE_DEFINITIONS ||--o{ HARNESS_AGENTS : configures
+  HARNESS_RELATIONSHIP_DEFINITIONS ||--o{ HARNESS_RELATIONSHIPS : configures
   HARNESS_AGENTS ||--o{ HARNESS_CHANNELS : participates
   HARNESS_CHANNELS ||--o{ HARNESS_COORDINATION_MESSAGES : contains
   HARNESS_COORDINATION_MESSAGES ||--o{ HARNESS_DELIVERIES : delivered_as
 ```
 
-Graph state lives in the host SQLite database. A graph revision invalidates
-live subscriptions, while channel messages and delivery attempts remain
-durable across reconnects. Acknowledgements compare each participant's view
-against the other participant's revision stream; convergence is capped at
-three rounds.
+Agent roles and reusable directional relationship instructions, graph
+relationships, and coordination state live in the host SQLite database. Canvas
+positions are session-local. A graph revision invalidates live subscriptions,
+while channel messages and delivery attempts remain durable across reconnects.
+Acknowledgements compare each participant's view against the other
+participant's revision stream; convergence is capped at three rounds.
 
 ## Next slice
 

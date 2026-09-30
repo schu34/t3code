@@ -34,15 +34,6 @@ export const harnessGraphRegisterAgent = createEnvironmentRpcCommand(connectionA
   tag: WS_METHODS.harnessGraphRegisterAgent,
 });
 
-export const harnessGraphUpdateCanvas = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "environment-data:harness-graph:update-canvas",
-  tag: WS_METHODS.harnessGraphUpdateCanvas,
-  concurrency: {
-    mode: "latest",
-    key: ({ environmentId, input }) => `${environmentId}:${input.agentId}`,
-  },
-});
-
 export const harnessGraphUpsertRelationship = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "environment-data:harness-graph:upsert-relationship",
   tag: WS_METHODS.harnessGraphUpsertRelationship,
