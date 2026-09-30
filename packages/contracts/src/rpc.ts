@@ -275,6 +275,8 @@ import {
   HarnessAcknowledgeCoordinationInput,
   HarnessAgent,
   HarnessChannel,
+  HarnessCreateRelationshipDefinitionInput,
+  HarnessCreateRoleDefinitionInput,
   HarnessGetChannelInput,
   HarnessGraphError,
   HarnessGraphReadInput,
@@ -284,9 +286,10 @@ import {
   HarnessListDeliveriesResult,
   HarnessOpenChannelInput,
   HarnessRegisterAgentInput,
+  HarnessRelationshipDefinition,
+  HarnessRoleDefinition,
   HarnessSendCoordinationMessageInput,
   HarnessSetChannelStatusInput,
-  HarnessUpdateCanvasInput,
   HarnessUpdateDeliveryInput,
   HarnessUpsertRelationshipInput,
 } from "./harnessGraph.ts";
@@ -464,8 +467,9 @@ export const WS_METHODS = {
   harnessGraphRead: "harnessGraph.read",
   harnessGraphSubscribe: "harnessGraph.subscribe",
   harnessGraphGetChannel: "harnessGraph.getChannel",
+  harnessGraphCreateRoleDefinition: "harnessGraph.createRoleDefinition",
+  harnessGraphCreateRelationshipDefinition: "harnessGraph.createRelationshipDefinition",
   harnessGraphRegisterAgent: "harnessGraph.registerAgent",
-  harnessGraphUpdateCanvas: "harnessGraph.updateCanvas",
   harnessGraphUpsertRelationship: "harnessGraph.upsertRelationship",
   harnessGraphOpenChannel: "harnessGraph.openChannel",
   harnessGraphSendCoordination: "harnessGraph.sendCoordination",
@@ -1439,11 +1443,23 @@ const WsHarnessGraphRegisterAgentRpc = Rpc.make(WS_METHODS.harnessGraphRegisterA
   error: HarnessGraphError,
 });
 
-const WsHarnessGraphUpdateCanvasRpc = Rpc.make(WS_METHODS.harnessGraphUpdateCanvas, {
-  payload: HarnessUpdateCanvasInput,
-  success: HarnessGraphSnapshot,
-  error: HarnessGraphError,
-});
+const WsHarnessGraphCreateRoleDefinitionRpc = Rpc.make(
+  WS_METHODS.harnessGraphCreateRoleDefinition,
+  {
+    payload: HarnessCreateRoleDefinitionInput,
+    success: HarnessRoleDefinition,
+    error: HarnessGraphError,
+  },
+);
+
+const WsHarnessGraphCreateRelationshipDefinitionRpc = Rpc.make(
+  WS_METHODS.harnessGraphCreateRelationshipDefinition,
+  {
+    payload: HarnessCreateRelationshipDefinitionInput,
+    success: HarnessRelationshipDefinition,
+    error: HarnessGraphError,
+  },
+);
 
 const WsHarnessGraphUpsertRelationshipRpc = Rpc.make(WS_METHODS.harnessGraphUpsertRelationship, {
   payload: HarnessUpsertRelationshipInput,
@@ -1629,8 +1645,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsHarnessGraphReadRpc,
   WsHarnessGraphSubscribeRpc,
   WsHarnessGraphGetChannelRpc,
+  WsHarnessGraphCreateRoleDefinitionRpc,
+  WsHarnessGraphCreateRelationshipDefinitionRpc,
   WsHarnessGraphRegisterAgentRpc,
-  WsHarnessGraphUpdateCanvasRpc,
   WsHarnessGraphUpsertRelationshipRpc,
   WsHarnessGraphOpenChannelRpc,
   WsHarnessGraphSendCoordinationRpc,

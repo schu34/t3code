@@ -22,17 +22,49 @@ export default Effect.gen(function* () {
   `;
 
   yield* sql`
+    CREATE TABLE IF NOT EXISTS harness_role_definitions (
+      role_definition_id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      instructions TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (project_id, name)
+    )
+  `;
+  yield* sql`
+    CREATE INDEX IF NOT EXISTS idx_harness_role_definitions_project
+    ON harness_role_definitions(project_id, name, role_definition_id)
+  `;
+  yield* sql`
+    CREATE TABLE IF NOT EXISTS harness_relationship_definitions (
+      relationship_definition_id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      requester_role_ids_json TEXT NOT NULL,
+      responder_role_ids_json TEXT NOT NULL,
+      request_instructions TEXT NOT NULL,
+      response_instructions TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (project_id, name)
+    )
+  `;
+  yield* sql`
+    CREATE INDEX IF NOT EXISTS idx_harness_relationship_definitions_project
+    ON harness_relationship_definitions(project_id, name, relationship_definition_id)
+  `;
+
+  yield* sql`
     CREATE TABLE IF NOT EXISTS harness_agents (
       agent_id TEXT PRIMARY KEY,
       thread_id TEXT NOT NULL UNIQUE,
       project_id TEXT NOT NULL,
       display_name TEXT NOT NULL,
-      role TEXT NOT NULL CHECK (role IN ('root', 'delegated', 'sidechat')),
+      kind TEXT NOT NULL CHECK (kind IN ('root', 'delegated', 'sidechat')),
+      role_definition_id TEXT NOT NULL REFERENCES harness_role_definitions(role_definition_id),
       status TEXT NOT NULL CHECK (status IN ('active', 'paused', 'completed', 'failed')),
       parent_agent_id TEXT REFERENCES harness_agents(agent_id) ON DELETE SET NULL,
-      canvas_x REAL NOT NULL DEFAULT 0,
-      canvas_y REAL NOT NULL DEFAULT 0,
-      canvas_collapsed INTEGER NOT NULL DEFAULT 0 CHECK (canvas_collapsed IN (0, 1)),
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
@@ -47,11 +79,12 @@ export default Effect.gen(function* () {
       relationship_id TEXT PRIMARY KEY,
       source_agent_id TEXT NOT NULL REFERENCES harness_agents(agent_id) ON DELETE CASCADE,
       target_agent_id TEXT NOT NULL REFERENCES harness_agents(agent_id) ON DELETE CASCADE,
-      kind TEXT NOT NULL CHECK (kind IN ('delegation', 'sidechat')),
+      structure TEXT NOT NULL CHECK (structure IN ('delegation', 'sidechat')),
+      relationship_definition_id TEXT NOT NULL REFERENCES harness_relationship_definitions(relationship_definition_id),
       topic TEXT,
       forked_from_turn_id TEXT,
       created_at TEXT NOT NULL,
-      UNIQUE (source_agent_id, target_agent_id, kind)
+      UNIQUE (source_agent_id, target_agent_id, structure)
     )
   `;
   yield* sql`
@@ -98,7 +131,7 @@ export default Effect.gen(function* () {
       sender_agent_id TEXT NOT NULL REFERENCES harness_agents(agent_id) ON DELETE CASCADE,
       recipient_agent_id TEXT NOT NULL REFERENCES harness_agents(agent_id) ON DELETE CASCADE,
       author_kind TEXT NOT NULL CHECK (author_kind IN ('user', 'agent')),
-      message_kind TEXT NOT NULL CHECK (message_kind IN ('update', 'question', 'agreement', 'decision', 'test-result')),
+      message_kind TEXT NOT NULL,
       topic TEXT NOT NULL,
       body TEXT NOT NULL,
       summary TEXT,

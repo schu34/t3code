@@ -18,6 +18,16 @@ export const HarnessRelationshipId = TrimmedNonEmptyString.pipe(
 );
 export type HarnessRelationshipId = typeof HarnessRelationshipId.Type;
 
+export const HarnessRoleDefinitionId = TrimmedNonEmptyString.pipe(
+  Schema.brand("HarnessRoleDefinitionId"),
+);
+export type HarnessRoleDefinitionId = typeof HarnessRoleDefinitionId.Type;
+
+export const HarnessRelationshipDefinitionId = TrimmedNonEmptyString.pipe(
+  Schema.brand("HarnessRelationshipDefinitionId"),
+);
+export type HarnessRelationshipDefinitionId = typeof HarnessRelationshipDefinitionId.Type;
+
 export const HarnessChannelId = TrimmedNonEmptyString.pipe(Schema.brand("HarnessChannelId"));
 export type HarnessChannelId = typeof HarnessChannelId.Type;
 
@@ -29,14 +39,16 @@ export type HarnessCoordinationMessageId = typeof HarnessCoordinationMessageId.T
 export const HarnessDeliveryId = TrimmedNonEmptyString.pipe(Schema.brand("HarnessDeliveryId"));
 export type HarnessDeliveryId = typeof HarnessDeliveryId.Type;
 
-export const HarnessAgentRole = Schema.Literals(["root", "delegated", "sidechat"]);
-export type HarnessAgentRole = typeof HarnessAgentRole.Type;
+/** Structural origin of an agent in the graph; persona behavior lives in its role definition. */
+export const HarnessAgentKind = Schema.Literals(["root", "delegated", "sidechat"]);
+export type HarnessAgentKind = typeof HarnessAgentKind.Type;
 
 export const HarnessAgentStatus = Schema.Literals(["active", "paused", "completed", "failed"]);
 export type HarnessAgentStatus = typeof HarnessAgentStatus.Type;
 
-export const HarnessRelationshipKind = Schema.Literals(["delegation", "sidechat"]);
-export type HarnessRelationshipKind = typeof HarnessRelationshipKind.Type;
+/** Structural edge used for graph layout; interaction behavior lives in its definition. */
+export const HarnessRelationshipStructure = Schema.Literals(["delegation", "sidechat"]);
+export type HarnessRelationshipStructure = typeof HarnessRelationshipStructure.Type;
 
 export const HarnessCoordinationStatus = Schema.Literals([
   "syncing",
@@ -60,13 +72,7 @@ export type HarnessDeliverySide = typeof HarnessDeliverySide.Type;
 export const HarnessMessageAuthorKind = Schema.Literals(["user", "agent"]);
 export type HarnessMessageAuthorKind = typeof HarnessMessageAuthorKind.Type;
 
-export const HarnessCoordinationMessageKind = Schema.Literals([
-  "update",
-  "question",
-  "agreement",
-  "decision",
-  "test-result",
-]);
+export const HarnessCoordinationMessageKind = TrimmedNonEmptyString;
 export type HarnessCoordinationMessageKind = typeof HarnessCoordinationMessageKind.Type;
 
 /** A bounded convergence round. A channel may never negotiate beyond round 3. */
@@ -75,22 +81,38 @@ export const HarnessConvergenceRound = Schema.Int.check(
 );
 export type HarnessConvergenceRound = typeof HarnessConvergenceRound.Type;
 
-export const HarnessCanvasPosition = Schema.Struct({
-  x: Schema.Finite,
-  y: Schema.Finite,
-  collapsed: Schema.Boolean,
+export const HarnessRoleDefinition = Schema.Struct({
+  roleDefinitionId: HarnessRoleDefinitionId,
+  projectId: ProjectId,
+  name: TrimmedNonEmptyString,
+  instructions: Schema.String,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
 });
-export type HarnessCanvasPosition = typeof HarnessCanvasPosition.Type;
+export type HarnessRoleDefinition = typeof HarnessRoleDefinition.Type;
+
+export const HarnessRelationshipDefinition = Schema.Struct({
+  relationshipDefinitionId: HarnessRelationshipDefinitionId,
+  projectId: ProjectId,
+  name: TrimmedNonEmptyString,
+  requesterRoleIds: Schema.Array(HarnessRoleDefinitionId),
+  responderRoleIds: Schema.Array(HarnessRoleDefinitionId),
+  requestInstructions: Schema.String,
+  responseInstructions: Schema.String,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type HarnessRelationshipDefinition = typeof HarnessRelationshipDefinition.Type;
 
 export const HarnessAgent = Schema.Struct({
   agentId: HarnessAgentId,
   threadId: ThreadId,
   projectId: ProjectId,
   displayName: TrimmedNonEmptyString,
-  role: HarnessAgentRole,
+  kind: HarnessAgentKind,
+  roleDefinitionId: HarnessRoleDefinitionId,
   status: HarnessAgentStatus,
   parentAgentId: Schema.optional(HarnessAgentId),
-  canvas: HarnessCanvasPosition,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -100,7 +122,8 @@ export const HarnessRelationship = Schema.Struct({
   relationshipId: HarnessRelationshipId,
   sourceAgentId: HarnessAgentId,
   targetAgentId: HarnessAgentId,
-  kind: HarnessRelationshipKind,
+  structure: HarnessRelationshipStructure,
+  relationshipDefinitionId: HarnessRelationshipDefinitionId,
   topic: Schema.optional(TrimmedNonEmptyString),
   forkedFromTurnId: Schema.optional(TurnId),
   createdAt: IsoDateTime,
@@ -187,6 +210,8 @@ export const HarnessGraphSnapshot = Schema.Struct({
   revision: NonNegativeInt,
   agents: Schema.Array(HarnessAgent),
   relationships: Schema.Array(HarnessRelationship),
+  roleDefinitions: Schema.Array(HarnessRoleDefinition),
+  relationshipDefinitions: Schema.Array(HarnessRelationshipDefinition),
   channels: Schema.Array(HarnessChannelSummary),
 });
 export type HarnessGraphSnapshot = typeof HarnessGraphSnapshot.Type;
@@ -218,26 +243,39 @@ export const HarnessRegisterAgentInput = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
   displayName: TrimmedNonEmptyString,
-  role: HarnessAgentRole,
+  kind: HarnessAgentKind,
+  roleDefinitionId: HarnessRoleDefinitionId,
   parentAgentId: Schema.optional(HarnessAgentId),
   status: Schema.optional(HarnessAgentStatus),
-  canvas: Schema.optional(HarnessCanvasPosition),
 });
 export type HarnessRegisterAgentInput = typeof HarnessRegisterAgentInput.Type;
 
-export const HarnessUpdateCanvasInput = Schema.Struct({
-  agentId: HarnessAgentId,
-  x: Schema.Finite,
-  y: Schema.Finite,
-  collapsed: Schema.Boolean,
+export const HarnessCreateRoleDefinitionInput = Schema.Struct({
+  roleDefinitionId: HarnessRoleDefinitionId,
+  projectId: ProjectId,
+  name: TrimmedNonEmptyString,
+  instructions: Schema.String,
 });
-export type HarnessUpdateCanvasInput = typeof HarnessUpdateCanvasInput.Type;
+export type HarnessCreateRoleDefinitionInput = typeof HarnessCreateRoleDefinitionInput.Type;
+
+export const HarnessCreateRelationshipDefinitionInput = Schema.Struct({
+  relationshipDefinitionId: HarnessRelationshipDefinitionId,
+  projectId: ProjectId,
+  name: TrimmedNonEmptyString,
+  requesterRoleIds: Schema.Array(HarnessRoleDefinitionId),
+  responderRoleIds: Schema.Array(HarnessRoleDefinitionId),
+  requestInstructions: Schema.String,
+  responseInstructions: Schema.String,
+});
+export type HarnessCreateRelationshipDefinitionInput =
+  typeof HarnessCreateRelationshipDefinitionInput.Type;
 
 export const HarnessUpsertRelationshipInput = Schema.Struct({
   relationshipId: Schema.optional(HarnessRelationshipId),
   sourceAgentId: HarnessAgentId,
   targetAgentId: HarnessAgentId,
-  kind: HarnessRelationshipKind,
+  structure: HarnessRelationshipStructure,
+  relationshipDefinitionId: HarnessRelationshipDefinitionId,
   topic: Schema.optional(TrimmedNonEmptyString),
   forkedFromTurnId: Schema.optional(TurnId),
 });

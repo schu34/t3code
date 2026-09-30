@@ -2,24 +2,57 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  HarnessCanvasPosition,
+  HarnessAgent,
   HarnessConvergenceRound,
+  HarnessCreateRelationshipDefinitionInput,
+  HarnessCoordinationMessageKind,
   HarnessSendCoordinationMessageInput,
 } from "./harnessGraph.ts";
 
-const decodeCanvasPosition = Schema.decodeUnknownSync(HarnessCanvasPosition);
+const decodeAgent = Schema.decodeUnknownSync(HarnessAgent);
 const decodeConvergenceRound = Schema.decodeUnknownSync(HarnessConvergenceRound);
 const decodeSendMessage = Schema.decodeUnknownSync(HarnessSendCoordinationMessageInput);
+const decodeMessageKind = Schema.decodeUnknownSync(HarnessCoordinationMessageKind);
+const decodeRelationshipDefinition = Schema.decodeUnknownSync(
+  HarnessCreateRelationshipDefinitionInput,
+);
 
 describe("Harness graph contracts", () => {
-  it("accepts finite canvas coordinates and bounds convergence rounds", () => {
+  it("uses structural agent kinds separately from custom role definitions", () => {
     expect(
-      decodeCanvasPosition({
-        x: 120,
-        y: -40,
-        collapsed: false,
+      decodeAgent({
+        agentId: "agent-1",
+        threadId: "thread-1",
+        projectId: "project-1",
+        displayName: "Implementor",
+        kind: "delegated",
+        roleDefinitionId: "role-implementor",
+        status: "active",
+        createdAt: "2026-09-29T00:00:00.000Z",
+        updatedAt: "2026-09-29T00:00:00.000Z",
       }),
-    ).toEqual({ x: 120, y: -40, collapsed: false });
+    ).toMatchObject({ kind: "delegated", roleDefinitionId: "role-implementor" });
+  });
+
+  it("allows reusable directed role relationships with request and response instructions", () => {
+    expect(
+      decodeRelationshipDefinition({
+        relationshipDefinitionId: "product-consultation",
+        projectId: "project-1",
+        name: "Product consultation",
+        requesterRoleIds: ["role-implementor", "role-senior-engineer"],
+        responderRoleIds: ["role-product-manager"],
+        requestInstructions: "Ask for a product decision with relevant context.",
+        responseInstructions: "Return a decision and rationale.",
+      }),
+    ).toMatchObject({
+      requesterRoleIds: ["role-implementor", "role-senior-engineer"],
+      responderRoleIds: ["role-product-manager"],
+    });
+  });
+
+  it("accepts custom coordination labels and bounds convergence rounds", () => {
+    expect(decodeMessageKind("custom-review-note")).toBe("custom-review-note");
     expect(decodeConvergenceRound(3)).toBe(3);
     expect(() => decodeConvergenceRound(4)).toThrow();
   });

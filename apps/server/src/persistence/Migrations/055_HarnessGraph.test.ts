@@ -31,7 +31,9 @@ layer("055_HarnessGraph", (it) => {
           "harness_coordination_messages",
           "harness_deliveries",
           "harness_graph_meta",
+          "harness_relationship_definitions",
           "harness_relationships",
+          "harness_role_definitions",
         ],
       );
       assert.equal(migration.length, 1);
