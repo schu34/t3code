@@ -8,6 +8,7 @@ import {
   TurnId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import { ProviderInstanceId } from "./providerInstance.ts";
 
 /** Stable identity for a user-facing agent in the Harness graph. */
 export const HarnessAgentId = TrimmedNonEmptyString.pipe(Schema.brand("HarnessAgentId"));
@@ -49,6 +50,31 @@ export type HarnessAgentStatus = typeof HarnessAgentStatus.Type;
 /** Structural edge used for graph layout; interaction behavior lives in its definition. */
 export const HarnessRelationshipStructure = Schema.Literals(["delegation", "sidechat"]);
 export type HarnessRelationshipStructure = typeof HarnessRelationshipStructure.Type;
+
+/** Operations the client can truthfully offer for a graph-backed agent. */
+export const HarnessAgentCapability = Schema.Literals(["inspect"]);
+export type HarnessAgentCapability = typeof HarnessAgentCapability.Type;
+
+/**
+ * The graph can point at a durable T3 thread or at a provider-owned child.
+ * Native children deliberately do not receive a synthetic T3 thread id: the
+ * provider reference is opaque and interaction remains capability-driven.
+ */
+export const HarnessAgentBacking = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("thread"),
+    threadId: ThreadId,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("native"),
+    provider: TrimmedNonEmptyString,
+    providerInstanceId: Schema.optional(ProviderInstanceId),
+    providerAgentId: TrimmedNonEmptyString,
+    parentThreadId: ThreadId,
+    capabilities: Schema.Array(HarnessAgentCapability),
+  }),
+]);
+export type HarnessAgentBacking = typeof HarnessAgentBacking.Type;
 
 export const HarnessCoordinationStatus = Schema.Literals([
   "syncing",
@@ -106,12 +132,15 @@ export type HarnessRelationshipDefinition = typeof HarnessRelationshipDefinition
 
 export const HarnessAgent = Schema.Struct({
   agentId: HarnessAgentId,
-  threadId: ThreadId,
+  /** Optional for native provider children; retained for older clients. */
+  threadId: Schema.optional(ThreadId),
   projectId: ProjectId,
   displayName: TrimmedNonEmptyString,
   kind: HarnessAgentKind,
   roleDefinitionId: HarnessRoleDefinitionId,
   status: HarnessAgentStatus,
+  /** Optional so clients can still decode snapshots from pre-backing servers. */
+  backing: Schema.optional(HarnessAgentBacking),
   parentAgentId: Schema.optional(HarnessAgentId),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
