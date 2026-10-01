@@ -168,6 +168,19 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.subscribeServerLifecycle]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribeAuthAccess]: AuthAccessReadScope,
   [WS_METHODS.subscribeBackgroundPolicy]: AuthOrchestrationReadScope,
+  [WS_METHODS.harnessGraphRead]: AuthOrchestrationReadScope,
+  [WS_METHODS.harnessGraphSubscribe]: AuthOrchestrationReadScope,
+  [WS_METHODS.harnessGraphGetChannel]: AuthOrchestrationReadScope,
+  [WS_METHODS.harnessGraphCreateRoleDefinition]: AuthOrchestrationOperateScope,
+  [WS_METHODS.harnessGraphCreateRelationshipDefinition]: AuthOrchestrationOperateScope,
+  [WS_METHODS.harnessGraphRegisterAgent]: AuthOrchestrationOperateScope,
+  [WS_METHODS.harnessGraphUpsertRelationship]: AuthOrchestrationOperateScope,
+  [WS_METHODS.harnessGraphOpenChannel]: AuthOrchestrationOperateScope,
+  [WS_METHODS.harnessGraphSendCoordination]: AuthOrchestrationOperateScope,
+  [WS_METHODS.harnessGraphAcknowledgeCoordination]: AuthOrchestrationOperateScope,
+  [WS_METHODS.harnessGraphSetChannelStatus]: AuthOrchestrationOperateScope,
+  [WS_METHODS.harnessGraphUpdateDelivery]: AuthOrchestrationOperateScope,
+  [WS_METHODS.harnessGraphListDeliveries]: AuthOrchestrationReadScope,
 } as const satisfies Readonly<Record<WsRpcMethod, AuthEnvironmentScope>>;
 
 export function requiredScopeForRpcMethod(method: string): AuthEnvironmentScope {
