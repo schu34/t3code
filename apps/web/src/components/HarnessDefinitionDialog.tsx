@@ -1,0 +1,487 @@
+import {
+  HarnessRelationshipDefinitionId,
+  HarnessRoleDefinitionId,
+  type HarnessCreateRelationshipDefinitionInput,
+  type HarnessCreateRoleDefinitionInput,
+  type HarnessGraphSnapshot,
+  type HarnessRegisterAgentInput,
+  type ProjectId,
+} from "@t3tools/contracts";
+import { useState, type FormEvent } from "react";
+import { randomUUID } from "../lib/utils";
+import { relationshipDefinitionConflicts } from "../harnessDefinition.logic";
+import { Button } from "./ui/button";
+import {
+  Dialog,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+} from "./ui/dialog";
+import { Input } from "./ui/input";
+import { Label } from "./ui/label";
+import { Textarea } from "./ui/textarea";
+
+type AuthoringTab = "roles" | "relationships";
+
+export interface HarnessDefinitionProject {
+  readonly id: ProjectId;
+  readonly title: string;
+}
+
+export default function HarnessDefinitionDialog({
+  open,
+  onOpenChange,
+  projects,
+  graph,
+  onCreateRole,
+  onAssignRole,
+  onCreateRelationship,
+}: {
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly projects: ReadonlyArray<HarnessDefinitionProject>;
+  readonly graph: HarnessGraphSnapshot | null;
+  readonly onCreateRole: (input: HarnessCreateRoleDefinitionInput) => Promise<void>;
+  readonly onAssignRole: (input: HarnessRegisterAgentInput) => Promise<void>;
+  readonly onCreateRelationship: (input: HarnessCreateRelationshipDefinitionInput) => Promise<void>;
+}) {
+  const [tab, setTab] = useState<AuthoringTab>("roles");
+  const [projectId, setProjectId] = useState<ProjectId | "">(projects[0]?.id ?? "");
+  const [roleName, setRoleName] = useState("");
+  const [roleInstructions, setRoleInstructions] = useState("");
+  const [agentToAssignId, setAgentToAssignId] = useState("");
+  const [roleToAssignId, setRoleToAssignId] = useState<HarnessRoleDefinitionId | "">("");
+  const [relationshipName, setRelationshipName] = useState("");
+  const [requesterRoleIds, setRequesterRoleIds] = useState<Array<HarnessRoleDefinitionId>>([]);
+  const [responderRoleIds, setResponderRoleIds] = useState<Array<HarnessRoleDefinitionId>>([]);
+  const [requestInstructions, setRequestInstructions] = useState("");
+  const [responseInstructions, setResponseInstructions] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const visibleProjectId = projects.some((project) => project.id === projectId)
+    ? projectId
+    : (projects[0]?.id ?? "");
+  const roles = graph?.roleDefinitions.filter((role) => role.projectId === visibleProjectId) ?? [];
+  const relationships =
+    graph?.relationshipDefinitions.filter(
+      (relationship) => relationship.projectId === visibleProjectId,
+    ) ?? [];
+  const assignableAgents =
+    graph?.agents.filter(
+      (agent) =>
+        agent.projectId === visibleProjectId &&
+        agent.threadId !== undefined &&
+        agent.backing?.kind !== "native",
+    ) ?? [];
+  const hasPairConflict =
+    visibleProjectId !== "" &&
+    relationshipDefinitionConflicts(
+      graph?.relationshipDefinitions ?? [],
+      visibleProjectId,
+      requesterRoleIds,
+      responderRoleIds,
+    );
+
+  const submitRole = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (visibleProjectId === "") return;
+    setIsSaving(true);
+    setError(null);
+    try {
+      await onCreateRole({
+        roleDefinitionId: HarnessRoleDefinitionId.make("role:" + randomUUID()),
+        projectId: visibleProjectId,
+        name: roleName.trim(),
+        instructions: roleInstructions,
+      });
+      setRoleName("");
+      setRoleInstructions("");
+    } catch {
+      setError("Could not create this role. Check the name and try again.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const submitRelationship = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (visibleProjectId === "" || requesterRoleIds.length === 0 || responderRoleIds.length === 0) {
+      return;
+    }
+    if (hasPairConflict) {
+      setError("A relationship already defines at least one of these role pairings.");
+      return;
+    }
+    setIsSaving(true);
+    setError(null);
+    try {
+      await onCreateRelationship({
+        relationshipDefinitionId: HarnessRelationshipDefinitionId.make(
+          "relationship:" + randomUUID(),
+        ),
+        projectId: visibleProjectId,
+        name: relationshipName.trim(),
+        requesterRoleIds,
+        responderRoleIds,
+        requestInstructions,
+        responseInstructions,
+      });
+      setRelationshipName("");
+      setRequesterRoleIds([]);
+      setResponderRoleIds([]);
+      setRequestInstructions("");
+      setResponseInstructions("");
+    } catch {
+      setError("Could not create this relationship. Check its name and role pairings.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const submitRoleAssignment = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const agent = assignableAgents.find((candidate) => candidate.agentId === agentToAssignId);
+    if (agent === undefined || agent.threadId === undefined || roleToAssignId === "") return;
+    setIsSaving(true);
+    setError(null);
+    try {
+      await onAssignRole({
+        agentId: agent.agentId,
+        threadId: agent.threadId,
+        projectId: agent.projectId,
+        displayName: agent.displayName,
+        kind: agent.kind,
+        roleDefinitionId: roleToAssignId,
+        ...(agent.parentAgentId === undefined ? {} : { parentAgentId: agent.parentAgentId }),
+        status: agent.status,
+      });
+    } catch {
+      setError("Could not assign this role to the selected agent.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const toggleRole = (
+    roleId: HarnessRoleDefinitionId,
+    selected: ReadonlyArray<HarnessRoleDefinitionId>,
+    update: (value: Array<HarnessRoleDefinitionId>) => void,
+  ) => {
+    update(
+      selected.includes(roleId)
+        ? selected.filter((selectedId) => selectedId !== roleId)
+        : [...selected, roleId],
+    );
+    setError(null);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(nextOpen) => onOpenChange(nextOpen)}>
+      <DialogPopup className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Roles & relationships</DialogTitle>
+          <DialogDescription>
+            Define agent roles and the instructions they use when asking or responding to each
+            other.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogPanel className="grid gap-4" scrollFade={false}>
+          {projects.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Create a project before defining roles.</p>
+          ) : (
+            <>
+              <div className="grid gap-2">
+                <Label htmlFor="harness-definition-project">Project</Label>
+                <select
+                  id="harness-definition-project"
+                  className="h-8 rounded-lg border border-input bg-background px-3 text-sm"
+                  value={visibleProjectId}
+                  onChange={(event) => {
+                    setProjectId(event.target.value as ProjectId);
+                    setRequesterRoleIds([]);
+                    setResponderRoleIds([]);
+                    setAgentToAssignId("");
+                    setRoleToAssignId("");
+                    setError(null);
+                  }}
+                  disabled={isSaving}
+                >
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex gap-2 border-b border-border/70 pb-2" role="tablist">
+                {(["roles", "relationships"] as const).map((value) => (
+                  <Button
+                    key={value}
+                    size="sm"
+                    variant={tab === value ? "secondary" : "ghost"}
+                    role="tab"
+                    aria-selected={tab === value}
+                    onClick={() => {
+                      setTab(value);
+                      setError(null);
+                    }}
+                  >
+                    {value === "roles" ? "Roles" : "Relationships"}
+                  </Button>
+                ))}
+              </div>
+
+              {tab === "roles" ? (
+                <>
+                  <form className="grid gap-3" onSubmit={submitRole}>
+                    <div className="grid gap-2">
+                      <Label htmlFor="harness-role-name">Role name</Label>
+                      <Input
+                        id="harness-role-name"
+                        value={roleName}
+                        onChange={(event) => setRoleName(event.target.value)}
+                        placeholder="Senior engineer"
+                        maxLength={120}
+                        required
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="harness-role-instructions">Instructions</Label>
+                      <Textarea
+                        id="harness-role-instructions"
+                        value={roleInstructions}
+                        onChange={(event) => setRoleInstructions(event.target.value)}
+                        placeholder="Review architecture, call out risks, and explain tradeoffs."
+                        rows={4}
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <h3 className="text-xs font-semibold text-muted-foreground">Project roles</h3>
+                      {roles.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">No roles have been created.</p>
+                      ) : (
+                        roles.map((role) => (
+                          <div key={role.roleDefinitionId} className="rounded-md border px-3 py-2">
+                            <p className="text-sm font-medium">{role.name}</p>
+                            {role.instructions ? (
+                              <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-xs text-muted-foreground">
+                                {role.instructions}
+                              </p>
+                            ) : null}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                    <DialogFooter variant="bare" className="px-0">
+                      <Button type="submit" disabled={isSaving || roleName.trim().length === 0}>
+                        Create role
+                      </Button>
+                    </DialogFooter>
+                  </form>
+                  <form
+                    className="grid gap-2 rounded-lg border p-3"
+                    onSubmit={submitRoleAssignment}
+                  >
+                    <h3 className="text-sm font-semibold">Assign a role to an agent</h3>
+                    {assignableAgents.length === 0 || roles.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">
+                        Create an agent and a role in this project to assign one.
+                      </p>
+                    ) : (
+                      <>
+                        <label className="grid gap-1 text-xs text-muted-foreground">
+                          Agent
+                          <select
+                            className="h-8 rounded-md border border-input bg-background px-2 text-sm text-foreground"
+                            value={agentToAssignId}
+                            onChange={(event) => setAgentToAssignId(event.target.value)}
+                            disabled={isSaving}
+                          >
+                            <option value="">Choose an agent…</option>
+                            {assignableAgents.map((agent) => (
+                              <option key={agent.agentId} value={agent.agentId}>
+                                {agent.displayName} —{" "}
+                                {roles.find(
+                                  (role) => role.roleDefinitionId === agent.roleDefinitionId,
+                                )?.name ?? "Unknown role"}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="grid gap-1 text-xs text-muted-foreground">
+                          Role
+                          <select
+                            className="h-8 rounded-md border border-input bg-background px-2 text-sm text-foreground"
+                            value={roleToAssignId}
+                            onChange={(event) =>
+                              setRoleToAssignId(event.target.value as HarnessRoleDefinitionId)
+                            }
+                            disabled={isSaving}
+                          >
+                            <option value="">Choose a role…</option>
+                            {roles.map((role) => (
+                              <option key={role.roleDefinitionId} value={role.roleDefinitionId}>
+                                {role.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <div>
+                          <Button
+                            type="submit"
+                            size="sm"
+                            variant="outline"
+                            disabled={isSaving || agentToAssignId === "" || roleToAssignId === ""}
+                          >
+                            Assign role
+                          </Button>
+                        </div>
+                      </>
+                    )}
+                  </form>
+                </>
+              ) : (
+                <form className="grid gap-3" onSubmit={submitRelationship}>
+                  <div className="grid gap-2">
+                    <Label htmlFor="harness-relationship-name">Relationship name</Label>
+                    <Input
+                      id="harness-relationship-name"
+                      value={relationshipName}
+                      onChange={(event) => setRelationshipName(event.target.value)}
+                      placeholder="Product decision"
+                      maxLength={120}
+                      required
+                    />
+                  </div>
+                  {roles.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      Create at least one role before defining a relationship.
+                    </p>
+                  ) : (
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {[
+                        {
+                          label: "Requesters",
+                          selected: requesterRoleIds,
+                          update: setRequesterRoleIds,
+                        },
+                        {
+                          label: "Responders",
+                          selected: responderRoleIds,
+                          update: setResponderRoleIds,
+                        },
+                      ].map((side) => (
+                        <fieldset key={side.label} className="grid content-start gap-2">
+                          <legend className="text-sm font-medium">{side.label}</legend>
+                          {roles.map((role) => (
+                            <label
+                              key={role.roleDefinitionId}
+                              className="flex items-center gap-2 rounded-md border px-2.5 py-2 text-sm"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={side.selected.includes(role.roleDefinitionId)}
+                                onChange={() =>
+                                  toggleRole(role.roleDefinitionId, side.selected, side.update)
+                                }
+                                disabled={isSaving}
+                              />
+                              {role.name}
+                            </label>
+                          ))}
+                        </fieldset>
+                      ))}
+                    </div>
+                  )}
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid content-start gap-2">
+                      <Label htmlFor="harness-request-instructions">When requesting</Label>
+                      <Textarea
+                        id="harness-request-instructions"
+                        value={requestInstructions}
+                        onChange={(event) => setRequestInstructions(event.target.value)}
+                        placeholder="Frame the question as a product decision."
+                        rows={4}
+                      />
+                    </div>
+                    <div className="grid content-start gap-2">
+                      <Label htmlFor="harness-response-instructions">When responding</Label>
+                      <Textarea
+                        id="harness-response-instructions"
+                        value={responseInstructions}
+                        onChange={(event) => setResponseInstructions(event.target.value)}
+                        placeholder="Give a recommendation and explain why."
+                        rows={4}
+                      />
+                    </div>
+                  </div>
+                  {hasPairConflict ? (
+                    <p className="text-sm text-destructive" role="status">
+                      A relationship already covers at least one selected requester → responder
+                      pairing. Each role pairing can use only one relationship behavior.
+                    </p>
+                  ) : null}
+                  <div className="grid gap-2">
+                    <h3 className="text-xs font-semibold text-muted-foreground">
+                      Project relationships
+                    </h3>
+                    {relationships.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">
+                        No relationships have been created.
+                      </p>
+                    ) : (
+                      relationships.map((relationship) => (
+                        <div
+                          key={relationship.relationshipDefinitionId}
+                          className="rounded-md border px-3 py-2"
+                        >
+                          <p className="text-sm font-medium">{relationship.name}</p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {relationship.requesterRoleIds
+                              .map((id) => roles.find((role) => role.roleDefinitionId === id)?.name)
+                              .filter(Boolean)
+                              .join(", ")}{" "}
+                            →{" "}
+                            {relationship.responderRoleIds
+                              .map((id) => roles.find((role) => role.roleDefinitionId === id)?.name)
+                              .filter(Boolean)
+                              .join(", ")}
+                          </p>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                  <DialogFooter variant="bare" className="px-0">
+                    <Button
+                      type="submit"
+                      disabled={
+                        isSaving ||
+                        relationshipName.trim().length === 0 ||
+                        requesterRoleIds.length === 0 ||
+                        responderRoleIds.length === 0 ||
+                        roles.length === 0 ||
+                        hasPairConflict
+                      }
+                    >
+                      Create relationship
+                    </Button>
+                  </DialogFooter>
+                </form>
+              )}
+              {error ? (
+                <p className="text-sm text-destructive" role="alert">
+                  {error}
+                </p>
+              ) : null}
+            </>
+          )}
+        </DialogPanel>
+      </DialogPopup>
+    </Dialog>
+  );
+}

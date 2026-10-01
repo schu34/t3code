@@ -34,6 +34,7 @@ import {
   PlayIcon,
   PlusIcon,
   RotateCcwIcon,
+  Settings2Icon,
   UnplugIcon,
   XIcon,
   ZapIcon,
@@ -60,6 +61,7 @@ export interface HarnessCanvasProps {
   readonly snapshot: HarnessCanvasSnapshot;
   readonly actions: HarnessCanvasActions | null;
   readonly onSelectAgent: (agent: HarnessCanvasAgent) => void;
+  readonly onEditDefinitions?: () => void;
   readonly onCloseChat?: () => void;
   readonly selectedAgentId?: string | null;
   readonly className?: string;
@@ -647,6 +649,7 @@ function HarnessCanvasInner({
   snapshot,
   actions,
   onSelectAgent,
+  onEditDefinitions,
   selectedAgentId = null,
   className,
 }: HarnessCanvasProps) {
@@ -866,6 +869,15 @@ function HarnessCanvasInner({
               </span>
             </div>
             <div className="h-4 w-px bg-border/75" aria-hidden="true" />
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={onEditDefinitions}
+              aria-label="Edit Harness roles and relationships"
+            >
+              <Settings2Icon aria-hidden="true" />
+              Roles & relationships
+            </Button>
             <Button
               size="xs"
               variant="ghost"
