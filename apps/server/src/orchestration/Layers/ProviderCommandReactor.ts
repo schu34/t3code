@@ -279,6 +279,8 @@ const make = Effect.gen(function* () {
         AND a.backing_kind = 'thread'
       LIMIT 1
     `;
+    const role = roleRows[0];
+    if (role === undefined) return { relationships: [] };
     const relationshipRows = yield* sql<{
       readonly name: string;
       readonly direction: "requester" | "responder";
@@ -296,11 +298,16 @@ const make = Effect.gen(function* () {
         ON d.relationship_definition_id = r.relationship_definition_id
       WHERE a.thread_id = ${threadId}
         AND a.backing_kind = 'thread'
+        AND EXISTS (
+          SELECT 1
+          FROM json_each(CASE WHEN r.source_agent_id = a.agent_id
+            THEN d.requester_role_ids_json ELSE d.responder_role_ids_json END) allowed_role
+          WHERE allowed_role.value = a.role_definition_id
+        )
       ORDER BY r.created_at, r.relationship_id
     `;
-    const role = roleRows[0];
     return {
-      ...(role ? { role } : {}),
+      role,
       relationships: relationshipRows,
     };
   });
