@@ -34,6 +34,19 @@ export const harnessGraphRegisterAgent = createEnvironmentRpcCommand(connectionA
   tag: WS_METHODS.harnessGraphRegisterAgent,
 });
 
+export const harnessGraphCreateRoleDefinition = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:harness-graph:create-role-definition",
+  tag: WS_METHODS.harnessGraphCreateRoleDefinition,
+});
+
+export const harnessGraphCreateRelationshipDefinition = createEnvironmentRpcCommand(
+  connectionAtomRuntime,
+  {
+    label: "environment-data:harness-graph:create-relationship-definition",
+    tag: WS_METHODS.harnessGraphCreateRelationshipDefinition,
+  },
+);
+
 export const harnessGraphUpsertRelationship = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "environment-data:harness-graph:upsert-relationship",
   tag: WS_METHODS.harnessGraphUpsertRelationship,

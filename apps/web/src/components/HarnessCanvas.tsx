@@ -30,6 +30,7 @@ import {
   Link2Icon,
   MessageCircleIcon,
   PlusIcon,
+  Settings2Icon,
   XIcon,
   ZapIcon,
 } from "lucide-react";
@@ -59,6 +60,7 @@ export interface HarnessCanvasProps {
   readonly relationshipDefinitions?: ReadonlyArray<{ readonly id: string; readonly name: string }>;
   readonly actions: HarnessCanvasActions | null;
   readonly onSelectAgent: (agent: HarnessCanvasAgent) => void;
+  readonly onEditDefinitions?: () => void;
   readonly onCloseChat?: () => void;
   readonly selectedAgentId?: string | null;
   readonly className?: string;
@@ -536,6 +538,7 @@ function HarnessCanvasInner({
   snapshot,
   actions,
   onSelectAgent,
+  onEditDefinitions,
   selectedAgentId = null,
   relationshipDefinitions = NO_RELATIONSHIPS,
   className,
@@ -758,6 +761,15 @@ function HarnessCanvasInner({
               </span>
             </div>
             <div className="h-4 w-px bg-border/75" aria-hidden="true" />
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={onEditDefinitions}
+              aria-label="Edit Harness roles and relationships"
+            >
+              <Settings2Icon aria-hidden="true" />
+              Roles & relationships
+            </Button>
             <Button
               size="xs"
               variant="ghost"
