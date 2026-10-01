@@ -625,6 +625,56 @@ describe("ProviderCommandReactor", () => {
       generateBranchName,
       generateThreadTitle,
       runtimeSessions,
+      seedHarnessPromptBehavior: () =>
+        runtime!.runPromise(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            const now = "2026-01-01T00:00:00.000Z";
+            yield* sql`
+              INSERT INTO harness_role_definitions (
+                role_definition_id, project_id, name, instructions, created_at, updated_at
+              ) VALUES ('role-implementor', 'project-1', 'Implementor',
+                'Make small, tested changes.', ${now}, ${now})
+            `;
+            yield* sql`
+              INSERT INTO harness_role_definitions (
+                role_definition_id, project_id, name, instructions, created_at, updated_at
+              ) VALUES ('role-reviewer', 'project-1', 'Reviewer',
+                'Review carefully.', ${now}, ${now})
+            `;
+            yield* sql`
+              INSERT INTO harness_relationship_definitions (
+                relationship_definition_id, project_id, name,
+                requester_role_ids_json, responder_role_ids_json,
+                request_instructions, response_instructions, created_at, updated_at
+              ) VALUES ('rel-review', 'project-1', 'Code review',
+                '["role-implementor"]', '["role-reviewer"]',
+                'Include the tradeoffs in the review request.',
+                'Identify correctness risks and missing tests.', ${now}, ${now})
+            `;
+            yield* sql`
+              INSERT INTO harness_agents (
+                agent_id, thread_id, project_id, display_name, kind,
+                role_definition_id, status, created_at, updated_at
+              ) VALUES ('agent-implementor', 'thread-1', 'project-1', 'Implementor',
+                'root', 'role-implementor', 'active', ${now}, ${now})
+            `;
+            yield* sql`
+              INSERT INTO harness_agents (
+                agent_id, thread_id, project_id, display_name, kind,
+                role_definition_id, status, created_at, updated_at
+              ) VALUES ('agent-reviewer', 'thread-reviewer', 'project-1', 'Reviewer',
+                'delegated', 'role-reviewer', 'active', ${now}, ${now})
+            `;
+            yield* sql`
+              INSERT INTO harness_relationships (
+                relationship_id, source_agent_id, target_agent_id, structure,
+                relationship_definition_id, created_at
+              ) VALUES ('relationship-review', 'agent-implementor', 'agent-reviewer',
+                'delegation', 'rel-review', ${now})
+            `;
+          }),
+        ),
       stateDir,
       drain,
       startReactor,
@@ -887,6 +937,39 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.status).toBe("starting");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("applies authored Harness role and requester instructions to provider input", async () => {
+    const harness = await createHarness();
+    await harness.seedHarnessPromptBehavior();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-harness-behavior"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-harness-behavior"),
+          role: "user",
+          text: "Review this implementation",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const providerRequest = harness.sendTurn.mock.calls[0]?.[0] as
+      | { readonly input?: string }
+      | undefined;
+    const providerInput = providerRequest?.input;
+    expect(providerInput).toContain("### Role: Implementor");
+    expect(providerInput).toContain("Make small, tested changes.");
+    expect(providerInput).toContain("### Relationship: Code review (requester)");
+    expect(providerInput).toContain("Include the tradeoffs in the review request.");
+    expect(providerInput).toContain("### User request\n\nReview this implementation");
   });
 
   effectIt.effect("projects inline context before sending the provider turn", () =>
