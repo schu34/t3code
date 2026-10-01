@@ -11,6 +11,7 @@ import {
   ReactFlow,
   ReactFlowProvider,
   useEdgesState,
+  useNodesInitialized,
   useNodesState,
   useReactFlow,
   type Connection,
@@ -47,6 +48,7 @@ import {
   type HarnessCanvasAgent,
   type HarnessCanvasChannel,
   type HarnessCanvasEdge,
+  type HarnessCanvasPosition,
   type HarnessCanvasSnapshot,
   type HarnessEdgeKind,
   mergeHarnessCanvasNodeState,
@@ -644,8 +646,12 @@ function HarnessCanvasInner({
   const [selectedChannelDetail, setSelectedChannelDetail] = useState<HarnessCanvasChannel | null>(
     null,
   );
+  const [localPositions, setLocalPositions] = useState<ReadonlyMap<string, HarnessCanvasPosition>>(
+    new Map(),
+  );
   const [nodes, setNodes, onNodesChange] = useNodesState<HarnessFlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const nodesInitialized = useNodesInitialized();
   const { fitView } = useReactFlow();
 
   const visibleSnapshot = useMemo(
@@ -694,17 +700,30 @@ function HarnessCanvasInner({
   );
 
   useEffect(() => {
-    const nextNodes = makeFlowNodes(visibleSnapshot.agents, collapsedAgentIds, callbacks);
+    const nextNodes = makeFlowNodes(
+      visibleSnapshot.agents.map((agent) => ({
+        ...agent,
+        position: localPositions.get(agent.id) ?? agent.position,
+      })),
+      collapsedAgentIds,
+      callbacks,
+    );
     setNodes((current) => mergeHarnessCanvasNodeState(current, nextNodes));
     setEdges(makeFlowEdges(visibleSnapshot.edges));
   }, [
     callbacks,
     collapsedAgentIds,
+    localPositions,
     setEdges,
     setNodes,
     visibleSnapshot.agents,
     visibleSnapshot.edges,
   ]);
+
+  useEffect(() => {
+    if (!nodesInitialized) return;
+    void fitView({ padding: 0.2, duration: 0 });
+  }, [fitView, nodesInitialized]);
 
   const onConnect = useCallback(
     (connection: Connection) => {
@@ -723,10 +742,13 @@ function HarnessCanvasInner({
 
   const onNodeDragStop = useCallback(
     (_event: MouseEvent | TouchEvent, node: HarnessFlowNode, _nodes: HarnessFlowNode[]) => {
-      if (!actions) return;
-      void actions.updatePosition({ agentId: node.id, position: node.position });
+      setLocalPositions((current) => {
+        const next = new Map(current);
+        next.set(node.id, node.position);
+        return next;
+      });
     },
-    [actions],
+    [],
   );
 
   useEffect(() => {
