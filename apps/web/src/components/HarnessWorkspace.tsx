@@ -8,13 +8,14 @@ import type {
   HarnessRelationshipDefinitionId,
   TurnId,
 } from "@t3tools/contracts";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useComposerDraftStore } from "../composerDraftStore";
 
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { SidebarInset } from "./ui/sidebar";
 import HarnessCanvas from "./HarnessCanvas";
+import HarnessDefinitionDialog from "./HarnessDefinitionDialog";
 import {
   buildHarnessCanvasSnapshotFromThreads,
   harnessAgentId,
@@ -27,6 +28,8 @@ import {
 } from "../harnessCanvas.logic";
 import { useRightPanelStore } from "../rightPanelStore";
 import {
+  harnessGraphCreateRelationshipDefinition,
+  harnessGraphCreateRoleDefinition,
   harnessGraphGetChannel,
   harnessGraphOpenChannel,
   harnessGraphRead,
@@ -313,6 +316,7 @@ export default function HarnessWorkspace() {
     [draftThreadsByThreadKey],
   );
   const navigate = useNavigate();
+  const [isDefinitionDialogOpen, setDefinitionDialogOpen] = useState(false);
   const newThread = useNewThreadHandler();
   const latestProject = projects.find((project) => project.environmentId === environmentId);
   const graphRead = useEnvironmentQuery(
@@ -338,6 +342,12 @@ export default function HarnessWorkspace() {
   const setChannelStatus = useAtomCommand(harnessGraphSetChannelStatus, { reportFailure: false });
   const registerAgent = useAtomCommand(harnessGraphRegisterAgent, { reportFailure: false });
   const sendCoordination = useAtomCommand(harnessGraphSendCoordination, { reportFailure: false });
+  const createRoleDefinition = useAtomCommand(harnessGraphCreateRoleDefinition, {
+    reportFailure: false,
+  });
+  const createRelationshipDefinition = useAtomCommand(harnessGraphCreateRelationshipDefinition, {
+    reportFailure: false,
+  });
 
   const serverAgentId = useCallback(
     (localId: string): HarnessAgentId | null => {
@@ -572,13 +582,27 @@ export default function HarnessWorkspace() {
   );
 
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
-      <HarnessCanvas
-        snapshot={snapshot}
-        actions={actions}
-        onSelectAgent={onSelectAgent}
-        className="min-h-0"
+    <>
+      <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+        <HarnessCanvas
+          snapshot={snapshot}
+          actions={actions}
+          onSelectAgent={onSelectAgent}
+          onEditDefinitions={() => setDefinitionDialogOpen(true)}
+          className="min-h-0"
+        />
+      </SidebarInset>
+      <HarnessDefinitionDialog
+        open={isDefinitionDialogOpen}
+        onOpenChange={setDefinitionDialogOpen}
+        projects={projects
+          .filter((project) => project.environmentId === environmentId)
+          .map((project) => ({ id: project.id, title: project.title }))}
+        graph={graph ?? null}
+        onCreateRole={(input) => run(createRoleDefinition, input)}
+        onAssignRole={(input) => run(registerAgent, input)}
+        onCreateRelationship={(input) => run(createRelationshipDefinition, input)}
       />
-    </SidebarInset>
+    </>
   );
 }
