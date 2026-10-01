@@ -55,11 +55,7 @@ export type HarnessRelationshipStructure = typeof HarnessRelationshipStructure.T
 export const HarnessAgentCapability = Schema.Literals(["inspect"]);
 export type HarnessAgentCapability = typeof HarnessAgentCapability.Type;
 
-/**
- * The graph can point at a durable T3 thread or at a provider-owned child.
- * Native children deliberately do not receive a synthetic T3 thread id: the
- * provider reference is opaque and interaction remains capability-driven.
- */
+/** The graph can point at a durable T3 thread or a provider-owned child transcript. */
 export const HarnessAgentBacking = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("thread"),
@@ -67,6 +63,7 @@ export const HarnessAgentBacking = Schema.Union([
   }),
   Schema.Struct({
     kind: Schema.Literal("native"),
+    threadId: Schema.optional(ThreadId),
     provider: TrimmedNonEmptyString,
     providerInstanceId: Schema.optional(ProviderInstanceId),
     providerAgentId: TrimmedNonEmptyString,
