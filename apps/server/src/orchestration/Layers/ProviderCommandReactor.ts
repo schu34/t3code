@@ -31,6 +31,7 @@ import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
@@ -64,6 +65,7 @@ import {
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { applyHarnessPromptBehavior } from "../../harnessGraphPrompt.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
 const isProviderWorkspaceMissingError = Schema.is(ProviderWorkspaceMissingError);
@@ -209,6 +211,7 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
 
 const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
+  const sql = yield* SqlClient.SqlClient;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerAuthService = yield* ProviderAuthService;
@@ -262,6 +265,52 @@ const make = Effect.gen(function* () {
     }
   >();
   const stoppingThreadIds = new Set<ThreadId>();
+
+  const harnessPromptBehaviorForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const roleRows = yield* sql<{
+      readonly name: string;
+      readonly instructions: string;
+    }>`
+      SELECT d.name, d.instructions
+      FROM harness_agents a
+      JOIN harness_role_definitions d
+        ON d.role_definition_id = a.role_definition_id
+      WHERE a.thread_id = ${threadId}
+        AND a.backing_kind = 'thread'
+      LIMIT 1
+    `;
+    const role = roleRows[0];
+    if (role === undefined) return { relationships: [] };
+    const relationshipRows = yield* sql<{
+      readonly name: string;
+      readonly direction: "requester" | "responder";
+      readonly instructions: string;
+    }>`
+      SELECT
+        d.name,
+        CASE WHEN r.source_agent_id = a.agent_id THEN 'requester' ELSE 'responder' END AS direction,
+        CASE WHEN r.source_agent_id = a.agent_id
+          THEN d.request_instructions ELSE d.response_instructions END AS instructions
+      FROM harness_agents a
+      JOIN harness_relationships r
+        ON r.source_agent_id = a.agent_id OR r.target_agent_id = a.agent_id
+      JOIN harness_relationship_definitions d
+        ON d.relationship_definition_id = r.relationship_definition_id
+      WHERE a.thread_id = ${threadId}
+        AND a.backing_kind = 'thread'
+        AND EXISTS (
+          SELECT 1
+          FROM json_each(CASE WHEN r.source_agent_id = a.agent_id
+            THEN d.requester_role_ids_json ELSE d.responder_role_ids_json END) allowed_role
+          WHERE allowed_role.value = a.role_definition_id
+        )
+      ORDER BY r.created_at, r.relationship_id
+    `;
+    return {
+      role,
+      relationships: relationshipRows,
+    };
+  });
 
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -838,7 +887,10 @@ const make = Effect.gen(function* () {
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
-    const normalizedInput = toNonEmptyProviderInput(input.messageText);
+    const behavior = yield* harnessPromptBehaviorForThread(input.threadId);
+    const normalizedInput = toNonEmptyProviderInput(
+      applyHarnessPromptBehavior(input.messageText, behavior),
+    );
     const normalizedAttachments = input.attachments ?? [];
     const activeSession = yield* providerService
       .listSessions()
