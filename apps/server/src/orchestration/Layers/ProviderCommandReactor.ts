@@ -4,6 +4,7 @@ import {
   CommandId,
   EventId,
   type ModelSelection,
+  type MessageId,
   type OrchestrationEvent,
   ProviderDriverKind,
   type ProjectId,
@@ -266,7 +267,10 @@ const make = Effect.gen(function* () {
   >();
   const stoppingThreadIds = new Set<ThreadId>();
 
-  const harnessPromptBehaviorForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
+  const harnessPromptBehaviorForThread = Effect.fnUntraced(function* (
+    threadId: ThreadId,
+    messageId: MessageId,
+  ) {
     const roleRows = yield* sql<{
       readonly name: string;
       readonly instructions: string;
@@ -294,16 +298,14 @@ const make = Effect.gen(function* () {
       FROM harness_agents a
       JOIN harness_relationships r
         ON r.source_agent_id = a.agent_id OR r.target_agent_id = a.agent_id
+      JOIN harness_channels c ON c.relationship_id = r.relationship_id
+      JOIN harness_coordination_messages m ON m.channel_id = c.channel_id
       JOIN harness_relationship_definitions d
         ON d.relationship_definition_id = r.relationship_definition_id
       WHERE a.thread_id = ${threadId}
         AND a.backing_kind = 'thread'
-        AND EXISTS (
-          SELECT 1
-          FROM json_each(CASE WHEN r.source_agent_id = a.agent_id
-            THEN d.requester_role_ids_json ELSE d.responder_role_ids_json END) allowed_role
-          WHERE allowed_role.value = a.role_definition_id
-        )
+        AND m.message_id = ${messageId}
+        AND (m.sender_agent_id = a.agent_id OR m.recipient_agent_id = a.agent_id)
       ORDER BY r.created_at, r.relationship_id
     `;
     return {
@@ -868,6 +870,7 @@ const make = Effect.gen(function* () {
 
   const buildSendTurnRequestForThread = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
+    readonly messageId: MessageId;
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly modelSelection?: ModelSelection;
@@ -887,7 +890,7 @@ const make = Effect.gen(function* () {
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
-    const behavior = yield* harnessPromptBehaviorForThread(input.threadId);
+    const behavior = yield* harnessPromptBehaviorForThread(input.threadId, input.messageId);
     const normalizedInput = toNonEmptyProviderInput(
       applyHarnessPromptBehavior(input.messageText, behavior),
     );
@@ -1524,6 +1527,7 @@ const make = Effect.gen(function* () {
     }
     const sendTurnRequest = yield* buildSendTurnRequestForThread({
       threadId: event.payload.threadId,
+      messageId: event.payload.messageId,
       messageText: projectComposerContextForProvider({
         text: message.text,
         records: message.context?.records ?? [],

@@ -52,7 +52,7 @@ export type HarnessCanvasAgentBacking =
   | {
       readonly kind: "native";
       readonly serverAgentId: HarnessAgentId;
-      readonly threadId?: ThreadId;
+      readonly threadId?: ThreadId | undefined;
       readonly provider: string;
       readonly providerAgentId: string;
       readonly parentThreadId: ThreadId;

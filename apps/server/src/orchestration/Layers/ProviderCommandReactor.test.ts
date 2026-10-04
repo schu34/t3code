@@ -625,7 +625,7 @@ describe("ProviderCommandReactor", () => {
       generateBranchName,
       generateThreadTitle,
       runtimeSessions,
-      seedHarnessPromptBehavior: () =>
+      seedHarnessPromptBehavior: (channelMessage = false) =>
         runtime!.runPromise(
           Effect.gen(function* () {
             const sql = yield* SqlClient.SqlClient;
@@ -645,26 +645,20 @@ describe("ProviderCommandReactor", () => {
             yield* sql`
               INSERT INTO harness_relationship_definitions (
                 relationship_definition_id, name,
-                requester_role_ids_json, responder_role_ids_json,
                 request_instructions, response_instructions, created_at, updated_at
               ) VALUES ('rel-review', 'Code review',
-                '["role-implementor"]', '["role-reviewer"]',
                 'Include the tradeoffs in the review request.',
                 'Identify correctness risks and missing tests.', ${now}, ${now})
             `;
             yield* sql`
               INSERT INTO harness_agents (
-                agent_id, thread_id, project_id, display_name, kind,
-                role_definition_id, status, created_at, updated_at
-              ) VALUES ('agent-implementor', 'thread-1', 'project-1', 'Implementor',
-                'root', 'role-implementor', 'active', ${now}, ${now})
+                agent_id, thread_id, kind, role_definition_id, created_at, updated_at
+              ) VALUES ('agent-implementor', 'thread-1', 'root', 'role-implementor', ${now}, ${now})
             `;
             yield* sql`
               INSERT INTO harness_agents (
-                agent_id, thread_id, project_id, display_name, kind,
-                role_definition_id, status, created_at, updated_at
-              ) VALUES ('agent-reviewer', 'thread-reviewer', 'project-1', 'Reviewer',
-                'delegated', 'role-reviewer', 'active', ${now}, ${now})
+                agent_id, thread_id, kind, role_definition_id, created_at, updated_at
+              ) VALUES ('agent-reviewer', 'thread-reviewer', 'delegated', 'role-reviewer', ${now}, ${now})
             `;
             yield* sql`
               INSERT INTO harness_relationships (
@@ -673,6 +667,12 @@ describe("ProviderCommandReactor", () => {
               ) VALUES ('relationship-review', 'agent-implementor', 'agent-reviewer',
                 'delegation', 'rel-review', ${now})
             `;
+            if (channelMessage) {
+              yield* sql`INSERT INTO harness_channels VALUES ('review-channel', 'relationship-review', 'Review', ${now})`;
+              yield* sql`INSERT INTO harness_coordination_messages VALUES
+                ('user-message-harness-behavior', 'review-channel', 'agent-implementor', 'agent-reviewer',
+                  'user', 'Review this implementation', 1, 'request-1', ${now})`;
+            }
           }),
         ),
       stateDir,
@@ -939,38 +939,55 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.runtimeMode).toBe("approval-required");
   });
 
-  it("applies authored Harness role and requester instructions to provider input", async () => {
-    const harness = await createHarness();
-    await harness.seedHarnessPromptBehavior();
+  it.each([false, true])(
+    "scopes Harness relationship instructions to channel turns (%s)",
+    async (channelMessage) => {
+      const harness = await createHarness();
+      await harness.seedHarnessPromptBehavior(channelMessage);
+      const sent = Effect.runSync(Deferred.make<void>());
+      harness.sendTurn.mockImplementation((_request: unknown) =>
+        Deferred.succeed(sent, undefined).pipe(
+          Effect.as({
+            threadId: ThreadId.make("thread-1"),
+            turnId: asTurnId("turn-1"),
+          }),
+        ),
+      );
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make("cmd-turn-start-harness-behavior"),
-        threadId: ThreadId.make("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-harness-behavior"),
-          role: "user",
-          text: "Review this implementation",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: "2026-01-01T00:00:00.000Z",
-      }),
-    );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-harness-behavior"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-harness-behavior"),
+            role: "user",
+            text: "Review this implementation",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        }),
+      );
 
-    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-    const providerRequest = harness.sendTurn.mock.calls[0]?.[0] as
-      | { readonly input?: string }
-      | undefined;
-    const providerInput = providerRequest?.input;
-    expect(providerInput).toContain("### Role: Implementor");
-    expect(providerInput).toContain("Make small, tested changes.");
-    expect(providerInput).toContain("### Relationship: Code review (requester)");
-    expect(providerInput).toContain("Include the tradeoffs in the review request.");
-    expect(providerInput).toContain("### User request\n\nReview this implementation");
-  });
+      await Effect.runPromise(Deferred.await(sent));
+      await harness.drain();
+      const providerRequest = harness.sendTurn.mock.calls[0]?.[0] as
+        | { readonly input?: string }
+        | undefined;
+      const providerInput = providerRequest?.input;
+      expect(providerInput).toContain("### Role: Implementor");
+      expect(providerInput).toContain("Make small, tested changes.");
+      if (channelMessage) {
+        expect(providerInput).toContain("### Relationship: Code review (requester)");
+        expect(providerInput).toContain("Include the tradeoffs in the review request.");
+      } else {
+        expect(providerInput).not.toContain("### Relationship:");
+      }
+      expect(providerInput).toContain("### User request\n\nReview this implementation");
+    },
+  );
 
   effectIt.effect("projects inline context before sending the provider turn", () =>
     Effect.gen(function* () {
