@@ -22,27 +22,25 @@ layer("055_HarnessGraph", (it) => {
       for (const projectId of ["project-a", "project-b"]) {
         yield* sql`
           INSERT INTO harness_agents
-            (agent_id, thread_id, project_id, display_name, kind, role_definition_id,
-             status, created_at, updated_at)
-          VALUES (${projectId}, ${projectId}, ${projectId}, 'Implementor', 'root',
-                  'shared-role', 'active', ${timestamp}, ${timestamp})
+            (agent_id, thread_id, kind, role_definition_id, created_at, updated_at)
+          VALUES ( ${projectId}, ${projectId}, 'root', 'shared-role', ${timestamp}, ${timestamp})
         `;
       }
       const agents = yield* sql<{
-        readonly project_id: string;
+        readonly thread_id: string;
         readonly role_definition_id: string;
       }>`
-        SELECT project_id, role_definition_id FROM harness_agents ORDER BY project_id
+        SELECT thread_id, role_definition_id FROM harness_agents ORDER BY thread_id
       `;
       assert.deepStrictEqual(agents, [
-        { project_id: "project-a", role_definition_id: "shared-role" },
-        { project_id: "project-b", role_definition_id: "shared-role" },
+        { thread_id: "project-a", role_definition_id: "shared-role" },
+        { thread_id: "project-b", role_definition_id: "shared-role" },
       ]);
       for (const table of ["harness_role_definitions", "harness_relationship_definitions"]) {
         const columns = yield* sql<{
           readonly name: string;
         }>`SELECT name FROM pragma_table_info(${table})`;
-        assert.isFalse(columns.some((column) => column.name === "project_id"));
+        assert.isFalse(columns.some((column) => column.name === "thread_id"));
       }
     }),
   );
@@ -67,7 +65,6 @@ layer("055_HarnessGraph", (it) => {
           "harness_agents",
           "harness_channels",
           "harness_coordination_messages",
-          "harness_deliveries",
           "harness_graph_meta",
           "harness_relationship_definitions",
           "harness_relationships",
