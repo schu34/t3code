@@ -16,6 +16,9 @@ import {
   EnvironmentId,
   EventId,
   GitCommandError,
+  HarnessAgentId,
+  HarnessRoleDefinitionId,
+  HarnessRelationshipDefinitionId,
   KeybindingRule,
   MessageId,
   ExternalLauncherCommandNotFoundError,
@@ -5438,6 +5441,92 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(record.resourceAttributes["service.name"], "t3-web");
         assert.equal(record.status?.code, String(span.status.code));
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("reuses harness definitions across projects through websocket rpc", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const wsUrl = yield* getWsServerUrl("/ws");
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const roleDefinitionId = HarnessRoleDefinitionId.make("shared-implementor");
+            const emptyGraph = yield* client[WS_METHODS.harnessGraphRead]({
+              projectId: ProjectId.make("empty-project"),
+            });
+            assert.equal(emptyGraph.agents.length, 0);
+            assert.isTrue(
+              emptyGraph.roleDefinitions.some(
+                (definition) => definition.roleDefinitionId === "builtin:general",
+              ),
+            );
+            const role = yield* client[WS_METHODS.harnessGraphCreateRoleDefinition]({
+              roleDefinitionId,
+              name: "Shared implementor",
+              instructions: "Implement changes.",
+            });
+            assert.isFalse("projectId" in role);
+            const relationshipDefinitionId = HarnessRelationshipDefinitionId.make("shared-review");
+            yield* client[WS_METHODS.harnessGraphCreateRelationshipDefinition]({
+              relationshipDefinitionId,
+              name: "Shared review",
+              requesterRoleIds: [roleDefinitionId],
+              responderRoleIds: [roleDefinitionId],
+              requestInstructions: "Request review.",
+              responseInstructions: "Review changes.",
+            });
+            for (const project of ["project-a", "project-b"]) {
+              const projectId = ProjectId.make(project);
+              for (const side of ["requester", "responder"]) {
+                yield* client[WS_METHODS.harnessGraphRegisterAgent]({
+                  agentId: HarnessAgentId.make(`${project}-${side}`),
+                  threadId: ThreadId.make(`${project}-${side}`),
+                  projectId,
+                  displayName: side,
+                  kind: "root",
+                  roleDefinitionId,
+                });
+              }
+              yield* client[WS_METHODS.harnessGraphUpsertRelationship]({
+                sourceAgentId: HarnessAgentId.make(`${project}-requester`),
+                targetAgentId: HarnessAgentId.make(`${project}-responder`),
+                structure: "delegation",
+                relationshipDefinitionId,
+              });
+              const graph = yield* client[WS_METHODS.harnessGraphRead]({ projectId });
+              assert.equal(graph.agents.length, 2);
+              assert.isTrue(graph.agents.every((agent) => agent.projectId === projectId));
+              assert.isTrue(
+                graph.roleDefinitions.some(
+                  (definition) => definition.roleDefinitionId === roleDefinitionId,
+                ),
+              );
+              assert.equal(graph.relationships.length, 1);
+              assert.isTrue(
+                graph.relationshipDefinitions.some(
+                  (definition) => definition.relationshipDefinitionId === relationshipDefinitionId,
+                ),
+              );
+              assert.equal(
+                graph.roleDefinitions.filter(
+                  (definition) => definition.roleDefinitionId === "builtin:general",
+                ).length,
+                1,
+              );
+            }
+            const missingRole = yield* client[WS_METHODS.harnessGraphCreateRelationshipDefinition]({
+              relationshipDefinitionId: HarnessRelationshipDefinitionId.make("invalid-review"),
+              name: "Invalid review",
+              requesterRoleIds: [HarnessRoleDefinitionId.make("missing")],
+              responderRoleIds: [roleDefinitionId],
+              requestInstructions: "",
+              responseInstructions: "",
+            }).pipe(Effect.flip);
+            assert.equal(missingRole._tag, "HarnessGraphValidationError");
+          }),
+        ),
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("routes websocket rpc server.upsertKeybinding", () =>

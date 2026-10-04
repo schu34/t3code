@@ -1905,7 +1905,6 @@ const makeWsRpcLayer = (
       };
       type HarnessRoleDefinitionRow = {
         readonly role_definition_id: string;
-        readonly project_id: string;
         readonly name: string;
         readonly instructions: string;
         readonly created_at: string;
@@ -1913,7 +1912,6 @@ const makeWsRpcLayer = (
       };
       type HarnessRelationshipDefinitionRow = {
         readonly relationship_definition_id: string;
-        readonly project_id: string;
         readonly name: string;
         readonly requester_role_ids_json: string;
         readonly responder_role_ids_json: string;
@@ -2040,7 +2038,6 @@ const makeWsRpcLayer = (
       });
       const makeHarnessRoleDefinition = (row: HarnessRoleDefinitionRow) => ({
         roleDefinitionId: HarnessRoleDefinitionId.make(row.role_definition_id),
-        projectId: ProjectId.make(row.project_id),
         name: row.name,
         instructions: row.instructions,
         createdAt: row.created_at,
@@ -2050,7 +2047,6 @@ const makeWsRpcLayer = (
         relationshipDefinitionId: HarnessRelationshipDefinitionId.make(
           row.relationship_definition_id,
         ),
-        projectId: ProjectId.make(row.project_id),
         name: row.name,
         requesterRoleIds: parseStringArray(row.requester_role_ids_json).map((id) =>
           HarnessRoleDefinitionId.make(id),
@@ -2132,15 +2128,12 @@ const makeWsRpcLayer = (
         }),
       );
       const publishHarnessGraphChange = PubSub.publish(harnessGraphChanges, undefined);
-      const defaultRoleDefinitionId = (projectId: ProjectId) =>
-        HarnessRoleDefinitionId.make(`builtin:${projectId}:general`);
-      const defaultRelationshipDefinitionId = (
-        projectId: ProjectId,
-        structure: "delegation" | "sidechat",
-      ) => HarnessRelationshipDefinitionId.make(`builtin:${projectId}:${structure}`);
-      const ensureBuiltinGraphDefinitions = (projectId: ProjectId, createdAt: string) =>
+      const defaultRoleDefinitionId = () => HarnessRoleDefinitionId.make("builtin:general");
+      const defaultRelationshipDefinitionId = (structure: "delegation" | "sidechat") =>
+        HarnessRelationshipDefinitionId.make(`builtin:${structure}`);
+      const ensureBuiltinGraphDefinitions = (createdAt: string) =>
         Effect.gen(function* () {
-          const roleDefinitionId = defaultRoleDefinitionId(projectId);
+          const roleDefinitionId = defaultRoleDefinitionId();
           const roleRows = yield* sql<{ readonly role_definition_id: string }>`
             SELECT role_definition_id FROM harness_role_definitions
             WHERE role_definition_id = ${roleDefinitionId}
@@ -2151,9 +2144,9 @@ const makeWsRpcLayer = (
           if (roleRows[0] === undefined) {
             yield* sql`
               INSERT INTO harness_role_definitions (
-                role_definition_id, project_id, name, instructions, created_at, updated_at
+                role_definition_id, name, instructions, created_at, updated_at
               ) VALUES (
-                ${roleDefinitionId}, ${projectId}, 'General agent',
+                ${roleDefinitionId}, 'General agent',
                 'Work as a general-purpose coding agent. Follow the user’s task and report progress clearly.',
                 ${createdAt}, ${createdAt}
               )
@@ -2161,7 +2154,7 @@ const makeWsRpcLayer = (
             changed = true;
           }
           for (const structure of ["delegation", "sidechat"] as const) {
-            const relationshipDefinitionId = defaultRelationshipDefinitionId(projectId, structure);
+            const relationshipDefinitionId = defaultRelationshipDefinitionId(structure);
             const relationshipRows = yield* sql<{
               readonly relationship_definition_id: string;
             }>`
@@ -2171,11 +2164,11 @@ const makeWsRpcLayer = (
             if (relationshipRows[0] !== undefined) continue;
             yield* sql`
               INSERT INTO harness_relationship_definitions (
-                relationship_definition_id, project_id, name, requester_role_ids_json,
+                relationship_definition_id, name, requester_role_ids_json,
                 responder_role_ids_json, request_instructions, response_instructions,
                 created_at, updated_at
               ) VALUES (
-                ${relationshipDefinitionId}, ${projectId}, ${structure},
+                ${relationshipDefinitionId}, ${structure},
                 ${defaultRoleIdsJson}, ${defaultRoleIdsJson},
                 ${
                   structure === "delegation"
@@ -2240,15 +2233,9 @@ const makeWsRpcLayer = (
           `;
           const existingAgentIds = new Set(existingRows.map((row) => row.agent_id));
           const existingThreadIds = new Set(existingRows.map((row) => row.thread_id));
-          let changed = false;
-          const seededProjects = new Set<string>();
+          let changed = yield* ensureBuiltinGraphDefinitions(yield* nowIso);
           for (const thread of threads) {
             const createdAt = yield* nowIso;
-            if (!seededProjects.has(thread.projectId)) {
-              changed =
-                (yield* ensureBuiltinGraphDefinitions(thread.projectId, createdAt)) || changed;
-              seededProjects.add(thread.projectId);
-            }
             if (existingAgentIds.has(thread.id) || existingThreadIds.has(thread.id)) continue;
             yield* sql`
               INSERT OR IGNORE INTO harness_agents (
@@ -2256,7 +2243,7 @@ const makeWsRpcLayer = (
                 status, created_at, updated_at
               ) VALUES (
                 ${thread.id}, ${thread.id}, ${thread.projectId}, ${thread.title},
-                'root', ${defaultRoleDefinitionId(thread.projectId)},
+                'root', ${defaultRoleDefinitionId()},
                 ${thread.settledOverride === "settled" || thread.archivedAt !== null ? "completed" : "active"},
                 ${createdAt}, ${createdAt}
               )
@@ -2315,33 +2302,16 @@ const makeWsRpcLayer = (
                     WHERE a.project_id = ${input.projectId}
                     ORDER BY r.created_at, r.relationship_id
                   `;
-            const roleDefinitions =
-              input.projectId === undefined
-                ? yield* sql<HarnessRoleDefinitionRow>`
-                    SELECT role_definition_id, project_id, name, instructions, created_at, updated_at
-                    FROM harness_role_definitions ORDER BY created_at, role_definition_id
-                  `
-                : yield* sql<HarnessRoleDefinitionRow>`
-                    SELECT role_definition_id, project_id, name, instructions, created_at, updated_at
-                    FROM harness_role_definitions WHERE project_id = ${input.projectId}
-                    ORDER BY created_at, role_definition_id
-                  `;
-            const relationshipDefinitions =
-              input.projectId === undefined
-                ? yield* sql<HarnessRelationshipDefinitionRow>`
-                    SELECT relationship_definition_id, project_id, name, requester_role_ids_json,
-                           responder_role_ids_json, request_instructions, response_instructions,
-                           created_at, updated_at
-                    FROM harness_relationship_definitions
-                    ORDER BY created_at, relationship_definition_id
-                  `
-                : yield* sql<HarnessRelationshipDefinitionRow>`
-                    SELECT relationship_definition_id, project_id, name, requester_role_ids_json,
-                           responder_role_ids_json, request_instructions, response_instructions,
-                           created_at, updated_at
-                    FROM harness_relationship_definitions WHERE project_id = ${input.projectId}
-                    ORDER BY created_at, relationship_definition_id
-                  `;
+            const roleDefinitions = yield* sql<HarnessRoleDefinitionRow>`
+              SELECT role_definition_id, name, instructions, created_at, updated_at
+              FROM harness_role_definitions ORDER BY created_at, role_definition_id
+            `;
+            const relationshipDefinitions = yield* sql<HarnessRelationshipDefinitionRow>`
+              SELECT relationship_definition_id, name, requester_role_ids_json,
+                     responder_role_ids_json, request_instructions, response_instructions,
+                     created_at, updated_at
+              FROM harness_relationship_definitions ORDER BY created_at, relationship_definition_id
+            `;
             const channels =
               input.projectId === undefined
                 ? yield* sql<
@@ -4331,9 +4301,9 @@ const makeWsRpcLayer = (
                 "create-role-definition",
                 sql`
                   INSERT INTO harness_role_definitions (
-                    role_definition_id, project_id, name, instructions, created_at, updated_at
+                    role_definition_id, name, instructions, created_at, updated_at
                   ) VALUES (
-                    ${input.roleDefinitionId}, ${input.projectId}, ${input.name},
+                    ${input.roleDefinitionId}, ${input.name},
                     ${input.instructions}, ${createdAt}, ${createdAt}
                   )
                 `,
@@ -4341,7 +4311,7 @@ const makeWsRpcLayer = (
               const rows = yield* harnessPersistence(
                 "read-role-definition",
                 sql<HarnessRoleDefinitionRow>`
-                  SELECT role_definition_id, project_id, name, instructions, created_at, updated_at
+                  SELECT role_definition_id, name, instructions, created_at, updated_at
                   FROM harness_role_definitions WHERE role_definition_id = ${input.roleDefinitionId}
                 `,
               );
@@ -4370,13 +4340,12 @@ const makeWsRpcLayer = (
                   sql<{ readonly role_definition_id: string }>`
                     SELECT role_definition_id FROM harness_role_definitions
                     WHERE role_definition_id = ${roleDefinitionId}
-                      AND project_id = ${input.projectId}
                   `,
                 );
                 if (roles[0] === undefined) {
                   return yield* harnessValidation(
                     "create-relationship-definition",
-                    `Role '${roleDefinitionId}' does not exist in project '${input.projectId}'.`,
+                    `Role '${roleDefinitionId}' does not exist.`,
                   );
                 }
               }
@@ -4389,11 +4358,11 @@ const makeWsRpcLayer = (
                 "create-relationship-definition",
                 sql`
                   INSERT INTO harness_relationship_definitions (
-                    relationship_definition_id, project_id, name, requester_role_ids_json,
+                    relationship_definition_id, name, requester_role_ids_json,
                     responder_role_ids_json, request_instructions, response_instructions,
                     created_at, updated_at
                   ) VALUES (
-                    ${input.relationshipDefinitionId}, ${input.projectId}, ${input.name},
+                    ${input.relationshipDefinitionId}, ${input.name},
                     ${requesterRoleIds}, ${responderRoleIds}, ${input.requestInstructions},
                     ${input.responseInstructions}, ${createdAt}, ${createdAt}
                   )
@@ -4402,7 +4371,7 @@ const makeWsRpcLayer = (
               const rows = yield* harnessPersistence(
                 "read-relationship-definition",
                 sql<HarnessRelationshipDefinitionRow>`
-                  SELECT relationship_definition_id, project_id, name, requester_role_ids_json,
+                  SELECT relationship_definition_id, name, requester_role_ids_json,
                          responder_role_ids_json, request_instructions, response_instructions,
                          created_at, updated_at
                   FROM harness_relationship_definitions
@@ -4422,22 +4391,18 @@ const makeWsRpcLayer = (
               if (input.parentAgentId !== undefined)
                 yield* requireHarnessAgent(input.parentAgentId);
               const createdAt = yield* nowIso;
-              const seededDefaults = yield* ensureBuiltinGraphDefinitions(
-                input.projectId,
-                createdAt,
-              );
+              const seededDefaults = yield* ensureBuiltinGraphDefinitions(createdAt);
               const roleDefinitions = yield* harnessPersistence(
                 "validate-agent-role",
                 sql<{ readonly role_definition_id: string }>`
                   SELECT role_definition_id FROM harness_role_definitions
                   WHERE role_definition_id = ${input.roleDefinitionId}
-                    AND project_id = ${input.projectId}
                 `,
               );
               if (roleDefinitions[0] === undefined) {
                 return yield* harnessValidation(
                   "register-agent",
-                  `Role '${input.roleDefinitionId}' does not exist in project '${input.projectId}'.`,
+                  `Role '${input.roleDefinitionId}' does not exist.`,
                 );
               }
               yield* harnessPersistence(
@@ -4490,19 +4455,18 @@ const makeWsRpcLayer = (
               const definitions = yield* harnessPersistence(
                 "load-relationship-definition",
                 sql<HarnessRelationshipDefinitionRow>`
-                  SELECT relationship_definition_id, project_id, name, requester_role_ids_json,
+                  SELECT relationship_definition_id, name, requester_role_ids_json,
                          responder_role_ids_json, request_instructions, response_instructions,
                          created_at, updated_at
                   FROM harness_relationship_definitions
                   WHERE relationship_definition_id = ${input.relationshipDefinitionId}
-                    AND project_id = ${sourceAgent.project_id}
                 `,
               );
               const definition = definitions[0];
               if (definition === undefined) {
                 return yield* harnessValidation(
                   "upsert-relationship",
-                  `Relationship definition '${input.relationshipDefinitionId}' does not exist in the endpoint project.`,
+                  `Relationship definition '${input.relationshipDefinitionId}' does not exist.`,
                 );
               }
               if (
