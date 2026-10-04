@@ -25,7 +25,6 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   CircleDotIcon,
-  GitPullRequestIcon,
   LayoutDashboardIcon,
   Link2Icon,
   MessageCircleIcon,
@@ -35,6 +34,9 @@ import {
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
+import { PullRequestGlyph } from "./pullRequest/pullRequestIcons";
+const GitPullRequestIcon = PullRequestGlyph.pullRequest;
+const NO_RELATIONSHIPS: NonNullable<HarnessCanvasProps["relationshipDefinitions"]> = [];
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { cn } from "~/lib/utils";
@@ -523,7 +525,7 @@ function HarnessCanvasInner({
   actions,
   onSelectAgent,
   selectedAgentId = null,
-  relationshipDefinitions = [],
+  relationshipDefinitions = NO_RELATIONSHIPS,
   className,
 }: HarnessCanvasProps) {
   const [relationshipDefinitionId, setRelationshipDefinitionId] = useState("");
