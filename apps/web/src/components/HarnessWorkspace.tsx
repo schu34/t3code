@@ -53,20 +53,18 @@ function graphAgentFor(
   );
 }
 
-function defaultRoleId(projectId: string): HarnessRoleDefinitionId {
-  return HarnessRoleDefinitionId.make(`builtin:${projectId}:general`);
+function defaultRoleId(): HarnessRoleDefinitionId {
+  return HarnessRoleDefinitionId.make("builtin:general");
 }
 
 function relationshipDefinitionIdFor(
   graph: HarnessGraphSnapshot | null,
-  projectId: string,
   sourceRoleDefinitionId: HarnessRoleDefinitionId,
   targetRoleDefinitionId: HarnessRoleDefinitionId,
 ): HarnessRelationshipDefinitionId | null {
   return (
     graph?.relationshipDefinitions.find(
       (definition) =>
-        definition.projectId === projectId &&
         definition.requesterRoleIds.includes(sourceRoleDefinitionId) &&
         definition.responderRoleIds.includes(targetRoleDefinitionId),
     )?.relationshipDefinitionId ?? null
@@ -339,7 +337,7 @@ export default function HarnessWorkspace() {
           projectId: latestProject.id,
           displayName: "New Codex agent",
           kind: "root" as const,
-          roleDefinitionId: defaultRoleId(latestProject.id),
+          roleDefinitionId: defaultRoleId(),
         });
       },
       createChild: async (agentId) => {
@@ -352,9 +350,8 @@ export default function HarnessWorkspace() {
         )?.roleDefinitionId;
         const relationshipDefinitionId = relationshipDefinitionIdFor(
           graph,
-          parent.projectId,
-          parentRoleDefinitionId ?? defaultRoleId(parent.projectId),
-          defaultRoleId(parent.projectId),
+          parentRoleDefinitionId ?? defaultRoleId(),
+          defaultRoleId(),
         );
         if (relationshipDefinitionId === null) return;
         const result = await newThread(scopeProjectRef(environmentId, parent.projectId), {
@@ -368,7 +365,7 @@ export default function HarnessWorkspace() {
           projectId: parent.projectId,
           displayName: "Delegated agent",
           kind: "delegated" as const,
-          roleDefinitionId: defaultRoleId(parent.projectId),
+          roleDefinitionId: defaultRoleId(),
           parentAgentId: parentServerId,
         });
         await run(upsertRelationship, {
@@ -387,9 +384,8 @@ export default function HarnessWorkspace() {
         )?.roleDefinitionId;
         const relationshipDefinitionId = relationshipDefinitionIdFor(
           graph,
-          parent.projectId,
-          parentRoleDefinitionId ?? defaultRoleId(parent.projectId),
-          defaultRoleId(parent.projectId),
+          parentRoleDefinitionId ?? defaultRoleId(),
+          defaultRoleId(),
         );
         if (relationshipDefinitionId === null) return;
         const result = await newThread(scopeProjectRef(environmentId, parent.projectId), {
@@ -403,7 +399,7 @@ export default function HarnessWorkspace() {
           projectId: parent.projectId,
           displayName: "Side chat",
           kind: "sidechat" as const,
-          roleDefinitionId: defaultRoleId(parent.projectId),
+          roleDefinitionId: defaultRoleId(),
           parentAgentId: parentServerId,
         });
         await run(upsertRelationship, {
@@ -423,7 +419,6 @@ export default function HarnessWorkspace() {
         if (sourceAgent === undefined || targetAgent === undefined) return;
         const relationshipDefinitionId = relationshipDefinitionIdFor(
           graph,
-          sourceAgent.projectId,
           sourceAgent.roleDefinitionId,
           targetAgent.roleDefinitionId,
         );
