@@ -5,11 +5,13 @@ import {
   HarnessAgent,
   HarnessConvergenceRound,
   HarnessCreateRelationshipDefinitionInput,
+  HarnessCreateRoleDefinitionInput,
   HarnessCoordinationMessageKind,
   HarnessSendCoordinationMessageInput,
 } from "./harnessGraph.ts";
 
 const decodeAgent = Schema.decodeUnknownSync(HarnessAgent);
+const decodeRoleDefinition = Schema.decodeUnknownSync(HarnessCreateRoleDefinitionInput);
 const decodeConvergenceRound = Schema.decodeUnknownSync(HarnessConvergenceRound);
 const decodeSendMessage = Schema.decodeUnknownSync(HarnessSendCoordinationMessageInput);
 const decodeMessageKind = Schema.decodeUnknownSync(HarnessCoordinationMessageKind);
@@ -18,6 +20,19 @@ const decodeRelationshipDefinition = Schema.decodeUnknownSync(
 );
 
 describe("Harness graph contracts", () => {
+  it("creates reusable role definitions without a project", () => {
+    expect(
+      decodeRoleDefinition({
+        roleDefinitionId: "role-implementor",
+        name: "Implementor",
+        instructions: "Implement the requested change.",
+      }),
+    ).toEqual({
+      roleDefinitionId: "role-implementor",
+      name: "Implementor",
+      instructions: "Implement the requested change.",
+    });
+  });
   it("uses structural agent kinds separately from custom role definitions", () => {
     expect(
       decodeAgent({
@@ -38,7 +53,6 @@ describe("Harness graph contracts", () => {
     expect(
       decodeRelationshipDefinition({
         relationshipDefinitionId: "product-consultation",
-        projectId: "project-1",
         name: "Product consultation",
         requesterRoleIds: ["role-implementor", "role-senior-engineer"],
         responderRoleIds: ["role-product-manager"],

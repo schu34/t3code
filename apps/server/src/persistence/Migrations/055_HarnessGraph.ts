@@ -24,22 +24,16 @@ export default Effect.gen(function* () {
   yield* sql`
     CREATE TABLE IF NOT EXISTS harness_role_definitions (
       role_definition_id TEXT PRIMARY KEY,
-      project_id TEXT NOT NULL,
       name TEXT NOT NULL,
       instructions TEXT NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      UNIQUE (project_id, name)
+      UNIQUE (name)
     )
-  `;
-  yield* sql`
-    CREATE INDEX IF NOT EXISTS idx_harness_role_definitions_project
-    ON harness_role_definitions(project_id, name, role_definition_id)
   `;
   yield* sql`
     CREATE TABLE IF NOT EXISTS harness_relationship_definitions (
       relationship_definition_id TEXT PRIMARY KEY,
-      project_id TEXT NOT NULL,
       name TEXT NOT NULL,
       requester_role_ids_json TEXT NOT NULL,
       responder_role_ids_json TEXT NOT NULL,
@@ -47,12 +41,8 @@ export default Effect.gen(function* () {
       response_instructions TEXT NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      UNIQUE (project_id, name)
+      UNIQUE (name)
     )
-  `;
-  yield* sql`
-    CREATE INDEX IF NOT EXISTS idx_harness_relationship_definitions_project
-    ON harness_relationship_definitions(project_id, name, relationship_definition_id)
   `;
 
   yield* sql`

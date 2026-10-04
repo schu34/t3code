@@ -83,7 +83,6 @@ export type HarnessConvergenceRound = typeof HarnessConvergenceRound.Type;
 
 export const HarnessRoleDefinition = Schema.Struct({
   roleDefinitionId: HarnessRoleDefinitionId,
-  projectId: ProjectId,
   name: TrimmedNonEmptyString,
   instructions: Schema.String,
   createdAt: IsoDateTime,
@@ -93,7 +92,6 @@ export type HarnessRoleDefinition = typeof HarnessRoleDefinition.Type;
 
 export const HarnessRelationshipDefinition = Schema.Struct({
   relationshipDefinitionId: HarnessRelationshipDefinitionId,
-  projectId: ProjectId,
   name: TrimmedNonEmptyString,
   requesterRoleIds: Schema.Array(HarnessRoleDefinitionId),
   responderRoleIds: Schema.Array(HarnessRoleDefinitionId),
@@ -252,7 +250,6 @@ export type HarnessRegisterAgentInput = typeof HarnessRegisterAgentInput.Type;
 
 export const HarnessCreateRoleDefinitionInput = Schema.Struct({
   roleDefinitionId: HarnessRoleDefinitionId,
-  projectId: ProjectId,
   name: TrimmedNonEmptyString,
   instructions: Schema.String,
 });
@@ -260,7 +257,6 @@ export type HarnessCreateRoleDefinitionInput = typeof HarnessCreateRoleDefinitio
 
 export const HarnessCreateRelationshipDefinitionInput = Schema.Struct({
   relationshipDefinitionId: HarnessRelationshipDefinitionId,
-  projectId: ProjectId,
   name: TrimmedNonEmptyString,
   requesterRoleIds: Schema.Array(HarnessRoleDefinitionId),
   responderRoleIds: Schema.Array(HarnessRoleDefinitionId),
