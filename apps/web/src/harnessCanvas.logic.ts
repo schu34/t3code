@@ -37,8 +37,6 @@ export type HarnessDeliveryStage =
 
 export type HarnessEdgeKind = "delegation" | "sidechat" | "coordination";
 
-export type HarnessChannelState = "syncing" | "aligned" | "needs-attention" | "paused";
-
 export interface HarnessCanvasPosition {
   readonly x: number;
   readonly y: number;
@@ -77,6 +75,7 @@ export interface HarnessCanvasEdge {
   readonly target: string;
   readonly kind: HarnessEdgeKind;
   readonly channelId: string | null;
+  readonly label?: string;
 }
 
 export interface HarnessChannelMessage {
@@ -86,24 +85,13 @@ export interface HarnessChannelMessage {
   readonly createdAt: string;
 }
 
-export interface HarnessChannelDecision {
-  readonly id: string;
-  readonly text: string;
-  readonly revision: number;
-  readonly createdAt: string;
-}
-
 export interface HarnessCanvasChannel {
   readonly id: string;
   readonly sourceAgentId: string;
   readonly targetAgentId: string;
   readonly topic: string;
-  readonly state: HarnessChannelState;
-  readonly revision: number;
   readonly messageCount: number;
   readonly transcript: ReadonlyArray<HarnessChannelMessage>;
-  readonly decisions: ReadonlyArray<HarnessChannelDecision>;
-  readonly lastSyncedAt: string | null;
 }
 
 export interface HarnessCanvasSnapshot {
@@ -124,12 +112,12 @@ export interface HarnessCanvasActions {
   readonly createAgent: () => Promise<void>;
   readonly createChild: (agentId: string) => Promise<void>;
   readonly forkSidechat: (agentId: string, completedTurnId: string) => Promise<void>;
-  readonly connect: (sourceAgentId: string, targetAgentId: string) => Promise<void>;
+  readonly connect: (
+    sourceAgentId: string,
+    targetAgentId: string,
+    relationshipDefinitionId: string,
+  ) => Promise<void>;
   readonly loadChannel: (channelId: string) => Promise<HarnessCanvasChannel | null>;
-  readonly syncChannel: (channelId: string) => Promise<void>;
-  readonly pauseChannel: (channelId: string) => Promise<void>;
-  readonly resumeChannel: (channelId: string) => Promise<void>;
-  readonly disconnectChannel: (channelId: string) => Promise<void>;
   readonly sendCoordination: (channelId: string, body: string) => Promise<void>;
 }
 

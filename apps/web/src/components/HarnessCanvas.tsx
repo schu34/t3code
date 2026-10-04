@@ -29,11 +29,7 @@ import {
   LayoutDashboardIcon,
   Link2Icon,
   MessageCircleIcon,
-  PauseIcon,
-  PlayIcon,
   PlusIcon,
-  RotateCcwIcon,
-  UnplugIcon,
   XIcon,
   ZapIcon,
 } from "lucide-react";
@@ -56,6 +52,7 @@ import {
 
 export interface HarnessCanvasProps {
   readonly snapshot: HarnessCanvasSnapshot;
+  readonly relationshipDefinitions?: ReadonlyArray<{ readonly id: string; readonly name: string }>;
   readonly actions: HarnessCanvasActions | null;
   readonly onSelectAgent: (agent: HarnessCanvasAgent) => void;
   readonly onCloseChat?: () => void;
@@ -314,7 +311,7 @@ function makeFlowEdges(edges: ReadonlyArray<HarnessCanvasEdge>): Edge[] {
     ...(edge.kind === "delegation"
       ? { sourceHandle: "bottom-source", targetHandle: "top-target" }
       : {}),
-    label: edgeKindLabels[edge.kind],
+    label: edge.label ?? edgeKindLabels[edge.kind],
     labelStyle: { fill: "var(--muted-foreground)", fontSize: 10, fontWeight: 500 },
     labelBgStyle: { fill: "var(--background)", fillOpacity: 0.92 },
     markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 },
@@ -426,9 +423,6 @@ function ChannelPanel({
 }) {
   const [draft, setDraft] = useState("");
   const [isSending, setIsSending] = useState(false);
-  const action = async (execute: (channelId: string) => Promise<void>) => {
-    await execute(channel.id);
-  };
   const sendUpdate = async () => {
     const body = draft.trim();
     if (body.length === 0 || actions === null) return;
@@ -458,24 +452,6 @@ function ChannelPanel({
         </Button>
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
-        <div className="flex items-center justify-between gap-2">
-          <Badge
-            variant={
-              channel.state === "aligned"
-                ? "success"
-                : channel.state === "needs-attention"
-                  ? "warning"
-                  : channel.state === "paused"
-                    ? "outline"
-                    : "info"
-            }
-          >
-            <CircleDotIcon aria-hidden="true" />
-            {channel.state === "needs-attention" ? "Needs attention" : channel.state}
-          </Badge>
-          <span className="text-xs text-muted-foreground">Revision {channel.revision}</span>
-        </div>
-
         <section aria-labelledby="harness-channel-transcript-heading">
           <h3
             id="harness-channel-transcript-heading"
@@ -506,27 +482,6 @@ function ChannelPanel({
           </div>
         </section>
 
-        <section aria-labelledby="harness-channel-decisions-heading">
-          <h3
-            id="harness-channel-decisions-heading"
-            className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-          >
-            Shared decisions
-          </h3>
-          {channel.decisions.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No decisions recorded.</p>
-          ) : (
-            <ul className="space-y-2 text-xs">
-              {channel.decisions.map((decision) => (
-                <li key={decision.id} className="rounded-lg border border-border/60 px-3 py-2">
-                  <span className="me-1.5 text-muted-foreground">R{decision.revision}</span>
-                  {decision.text}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
         <section aria-labelledby="harness-channel-message-heading">
           <div className="mb-2 flex items-center justify-between gap-2">
             <h3
@@ -545,86 +500,19 @@ function ChannelPanel({
             onChange={(event) => setDraft(event.target.value)}
             placeholder="Share context, a test result, or a decision…"
             aria-label="Coordination update"
-            disabled={actions === null || channel.state === "paused" || isSending}
+            disabled={actions === null || isSending}
           />
           <Button
             className="mt-2"
             size="sm"
             variant="default"
-            disabled={
-              actions === null ||
-              channel.state === "paused" ||
-              draft.trim().length === 0 ||
-              isSending
-            }
+            disabled={actions === null || draft.trim().length === 0 || isSending}
             onClick={() => void sendUpdate()}
           >
             <MessageCircleIcon aria-hidden="true" />
             {isSending ? "Sending…" : "Send update"}
           </Button>
         </section>
-
-        <dl className="grid grid-cols-2 gap-2 text-xs">
-          <div className="rounded-lg bg-muted/45 p-2">
-            <dt className="text-muted-foreground">Latest revision</dt>
-            <dd className="mt-1 font-medium">{channel.revision}</dd>
-          </div>
-          <div className="rounded-lg bg-muted/45 p-2">
-            <dt className="text-muted-foreground">Last synced</dt>
-            <dd className="mt-1 truncate font-medium">
-              {channel.lastSyncedAt ? new Date(channel.lastSyncedAt).toLocaleString() : "Never"}
-            </dd>
-          </div>
-        </dl>
-      </div>
-      <div className="flex flex-wrap gap-2 border-t border-border/70 p-3">
-        <Button
-          size="sm"
-          variant="default"
-          disabled={actions === null || channel.state === "paused"}
-          onClick={() => {
-            if (actions) void action(actions.syncChannel);
-          }}
-        >
-          <RotateCcwIcon aria-hidden="true" />
-          Sync now
-        </Button>
-        {channel.state === "paused" ? (
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={actions === null}
-            onClick={() => {
-              if (actions) void action(actions.resumeChannel);
-            }}
-          >
-            <PlayIcon aria-hidden="true" />
-            Resume
-          </Button>
-        ) : (
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={actions === null}
-            onClick={() => {
-              if (actions) void action(actions.pauseChannel);
-            }}
-          >
-            <PauseIcon aria-hidden="true" />
-            Pause
-          </Button>
-        )}
-        <Button
-          size="sm"
-          variant="ghost-muted"
-          disabled={actions === null}
-          onClick={() => {
-            if (actions) void action(actions.disconnectChannel);
-          }}
-        >
-          <UnplugIcon aria-hidden="true" />
-          Disconnect
-        </Button>
       </div>
     </aside>
   );
@@ -635,8 +523,10 @@ function HarnessCanvasInner({
   actions,
   onSelectAgent,
   selectedAgentId = null,
+  relationshipDefinitions = [],
   className,
 }: HarnessCanvasProps) {
+  const [relationshipDefinitionId, setRelationshipDefinitionId] = useState("");
   const [showArchivedCompleted, setShowArchivedCompleted] = useState(true);
   const [collapsedAgentIds, setCollapsedAgentIds] = useState<ReadonlySet<string>>(new Set());
   const [showDetails, setShowDetails] = useState(false);
@@ -710,15 +600,16 @@ function HarnessCanvasInner({
     (connection: Connection) => {
       if (
         !actions ||
+        !relationshipDefinitionId ||
         !connection.source ||
         !connection.target ||
         connection.source === connection.target
       ) {
         return;
       }
-      void actions.connect(connection.source, connection.target);
+      void actions.connect(connection.source, connection.target, relationshipDefinitionId);
     },
-    [actions],
+    [actions, relationshipDefinitionId],
   );
 
   const onNodeDragStop = useCallback(
@@ -897,12 +788,25 @@ function HarnessCanvasInner({
               <Link2Icon className="size-3.5" aria-hidden="true" />
               Connect agents
             </span>
+            <select
+              aria-label="Relationship behavior"
+              value={relationshipDefinitionId}
+              onChange={(event) => setRelationshipDefinitionId(event.target.value)}
+              className="h-7 rounded-md border border-input bg-background px-2 text-xs"
+            >
+              <option value="">Choose relationship…</option>
+              {relationshipDefinitions.map((definition) => (
+                <option key={definition.id} value={definition.id}>
+                  {definition.name}
+                </option>
+              ))}
+            </select>
             <ConnectionSelector
               agents={visibleSnapshot.agents}
               onConnect={(source, target) => {
-                if (actions) void actions.connect(source, target);
+                if (actions) void actions.connect(source, target, relationshipDefinitionId);
               }}
-              disabled={actions === null}
+              disabled={actions === null || !relationshipDefinitionId}
             />
           </div>
         </Panel>
@@ -938,7 +842,7 @@ function HarnessCanvasInner({
       {showDetails && !selectedChannel ? (
         <div className="absolute bottom-4 right-4 z-20 max-w-xs rounded-lg border border-border/70 bg-background/95 p-3 text-xs text-muted-foreground shadow-lg backdrop-blur">
           Select an agent to open its full chat controls. Select a labeled connection to inspect its
-          transcript and decisions.
+          transcript.
           <Button
             size="icon-micro"
             variant="ghost"
