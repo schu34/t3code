@@ -1,9 +1,8 @@
-import { HarnessRoleDefinitionId, ProjectId } from "@t3tools/contracts";
+import { HarnessRoleDefinitionId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import { relationshipDefinitionConflicts } from "./harnessDefinition.logic";
 
 describe("relationshipDefinitionConflicts", () => {
-  const projectId = ProjectId.make("project-1");
   const pm = HarnessRoleDefinitionId.make("role-pm");
   const implementor = HarnessRoleDefinitionId.make("role-implementor");
   const seniorEngineer = HarnessRoleDefinitionId.make("role-senior-engineer");
@@ -13,12 +12,10 @@ describe("relationshipDefinitionConflicts", () => {
       relationshipDefinitionConflicts(
         [
           {
-            projectId,
             requesterRoleIds: [pm],
             responderRoleIds: [seniorEngineer],
           },
         ],
-        projectId,
         [pm],
         [implementor],
       ),
@@ -30,15 +27,23 @@ describe("relationshipDefinitionConflicts", () => {
       relationshipDefinitionConflicts(
         [
           {
-            projectId,
             requesterRoleIds: [pm],
             responderRoleIds: [implementor, seniorEngineer],
           },
         ],
-        projectId,
         [pm],
         [implementor],
       ),
     ).toBe(true);
+  });
+
+  it("keeps request and response direction distinct", () => {
+    expect(
+      relationshipDefinitionConflicts(
+        [{ requesterRoleIds: [implementor], responderRoleIds: [pm] }],
+        [pm],
+        [implementor],
+      ),
+    ).toBe(false);
   });
 });
