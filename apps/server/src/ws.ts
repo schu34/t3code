@@ -135,7 +135,6 @@ import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import { readWorkflowScript } from "./orchestration/workflowScriptQuery.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
-import { foldHarnessNativeActivities } from "./harnessGraph.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
@@ -180,7 +179,6 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
-const decodeUnknownJsonString = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const encodeUnknownJsonString = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
@@ -1838,10 +1836,6 @@ const makeWsRpcLayer = (
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
-      // Harness keeps graph and coordination state in its own durable tables. The
-      // helpers below intentionally live beside the RPC layer for the first slice:
-      // they share the same authenticated SQL connection and can be moved behind a
-      // service once the graph protocol stabilizes.
       const isHarnessGraphError = (error: unknown): error is HarnessGraphError => {
         if (typeof error !== "object" || error === null || !("_tag" in error)) return false;
         const tag = (error as { readonly _tag?: unknown })._tag;
