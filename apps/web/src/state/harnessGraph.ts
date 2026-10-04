@@ -53,21 +53,3 @@ export const harnessGraphSendCoordination = createEnvironmentRpcCommand(connecti
   label: "environment-data:harness-graph:send-coordination",
   tag: WS_METHODS.harnessGraphSendCoordination,
 });
-
-export const harnessGraphAcknowledgeCoordination = createEnvironmentRpcCommand(
-  connectionAtomRuntime,
-  {
-    label: "environment-data:harness-graph:acknowledge-coordination",
-    tag: WS_METHODS.harnessGraphAcknowledgeCoordination,
-  },
-);
-
-export const harnessGraphSetChannelStatus = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "environment-data:harness-graph:set-channel-status",
-  tag: WS_METHODS.harnessGraphSetChannelStatus,
-});
-
-export const harnessGraphUpdateDelivery = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "environment-data:harness-graph:update-delivery",
-  tag: WS_METHODS.harnessGraphUpdateDelivery,
-});

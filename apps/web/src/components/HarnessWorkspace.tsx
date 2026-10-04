@@ -1,23 +1,28 @@
-import { HarnessRoleDefinitionId } from "@t3tools/contracts";
+import {
+  HarnessRoleDefinitionId,
+  HarnessRelationshipDefinitionId,
+  HarnessRelationshipId,
+  HarnessAgentId,
+  DEFAULT_MODEL,
+  ProviderInstanceId,
+} from "@t3tools/contracts";
 import type {
   EnvironmentId,
-  HarnessAgentId,
   HarnessChannel,
   HarnessChannelId,
   HarnessGraphSnapshot,
-  HarnessRelationshipDefinitionId,
   TurnId,
 } from "@t3tools/contracts";
 import { useCallback, useMemo } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { useComposerDraftStore } from "../composerDraftStore";
+import { useComposerDraftStore, markPromotedDraftThreadByRef } from "../composerDraftStore";
+import { threadEnvironment } from "../state/threads";
 
-import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { SidebarInset } from "./ui/sidebar";
 import HarnessCanvas from "./HarnessCanvas";
 import {
   buildHarnessCanvasSnapshotFromThreads,
-  harnessAgentId,
   layoutHarnessCanvasAgents,
   type HarnessCanvasActions,
   type HarnessCanvasAgent,
@@ -30,7 +35,6 @@ import {
   harnessGraphRead,
   harnessGraphRegisterAgent,
   harnessGraphSendCoordination,
-  harnessGraphSetChannelStatus,
   harnessGraphSubscribe,
   harnessGraphUpsertRelationship,
 } from "../state/harnessGraph";
@@ -47,8 +51,8 @@ function graphAgentFor(
 ): HarnessGraphSnapshot["agents"][number] | undefined {
   return graph?.agents.find(
     (agent) =>
-      agent.backing?.kind !== "native" &&
-      agent.threadId === localAgent.threadId &&
+      agent.backing.kind === "thread" &&
+      agent.backing.threadId === localAgent.threadId &&
       agent.projectId === localAgent.projectId,
   );
 }
@@ -57,34 +61,23 @@ function defaultRoleId(): HarnessRoleDefinitionId {
   return HarnessRoleDefinitionId.make("builtin:general");
 }
 
-function relationshipDefinitionIdFor(
-  graph: HarnessGraphSnapshot | null,
-  sourceRoleDefinitionId: HarnessRoleDefinitionId,
-  targetRoleDefinitionId: HarnessRoleDefinitionId,
-): HarnessRelationshipDefinitionId | null {
-  return (
-    graph?.relationshipDefinitions.find(
-      (definition) =>
-        definition.requesterRoleIds.includes(sourceRoleDefinitionId) &&
-        definition.responderRoleIds.includes(targetRoleDefinitionId),
-    )?.relationshipDefinitionId ?? null
-  );
-}
-
 function hydrateCanvasChannel(
   channel: HarnessChannel,
   localIdByServerId: ReadonlyMap<string, string>,
+  graph: HarnessGraphSnapshot | null,
 ): HarnessCanvasChannel | null {
-  const sourceAgentId = localIdByServerId.get(channel.agentAId);
-  const targetAgentId = localIdByServerId.get(channel.agentBId);
+  const relationship = graph?.relationships.find(
+    (r) => r.relationshipId === channel.relationshipId,
+  );
+  if (!relationship) return null;
+  const sourceAgentId = localIdByServerId.get(relationship.sourceAgentId);
+  const targetAgentId = localIdByServerId.get(relationship.targetAgentId);
   if (sourceAgentId === undefined || targetAgentId === undefined) return null;
   return {
     id: channel.channelId,
     sourceAgentId,
     targetAgentId,
     topic: channel.topic,
-    state: channel.status,
-    revision: Math.max(channel.revisionA, channel.revisionB),
     messageCount: channel.messages.length,
     transcript: channel.messages.map((message) => ({
       id: message.messageId,
@@ -92,13 +85,6 @@ function hydrateCanvasChannel(
       text: message.body,
       createdAt: message.createdAt,
     })),
-    decisions: channel.decisions.map((text, index) => ({
-      id: `${channel.channelId}:decision:${index}`,
-      text,
-      revision: channel.convergenceRound,
-      createdAt: channel.updatedAt,
-    })),
-    lastSyncedAt: channel.status === "aligned" ? channel.updatedAt : null,
   };
 }
 
@@ -122,59 +108,7 @@ function buildSnapshot(
   );
   if (graph === null) return base;
 
-  const graphOnlyAgents = graph.agents.flatMap((serverAgent) => {
-    if (serverAgent.backing?.kind === "native" || serverAgent.threadId === undefined) return [];
-    const alreadyVisible = base.agents.some(
-      (agent) =>
-        agent.threadId === serverAgent.threadId && agent.projectId === serverAgent.projectId,
-    );
-    if (alreadyVisible) return [];
-    const project = projects.find(
-      (candidate) =>
-        candidate.environmentId === environmentId && candidate.id === serverAgent.projectId,
-    );
-    const draft = drafts.find(
-      (candidate) =>
-        candidate.environmentId === environmentId &&
-        candidate.threadId === serverAgent.threadId &&
-        candidate.projectId === serverAgent.projectId,
-    );
-    const runtimeState =
-      serverAgent.status === "failed"
-        ? ("failed" as const)
-        : serverAgent.status === "paused"
-          ? ("waiting" as const)
-          : serverAgent.status === "completed"
-            ? ("stopped" as const)
-            : ("idle" as const);
-    return [
-      {
-        id: harnessAgentId(environmentId, serverAgent.threadId),
-        environmentId,
-        threadId: serverAgent.threadId,
-        ...(draft === undefined ? {} : { draftId: draft.draftId }),
-        projectId: serverAgent.projectId,
-        title: serverAgent.displayName,
-        projectTitle: project?.title ?? "Unknown project",
-        activity:
-          serverAgent.status === "failed"
-            ? "Agent failed"
-            : serverAgent.status === "paused"
-              ? "Paused by Harness"
-              : serverAgent.status === "completed"
-                ? "Completed"
-                : "Awaiting first turn",
-        runtimeState,
-        deliveryStage: "implementing" as const,
-        archived: serverAgent.status === "completed",
-        completed: serverAgent.status === "completed",
-        unreadCount: 0,
-        position: null,
-        latestCompletedTurnId: null,
-      } satisfies HarnessCanvasAgent,
-    ];
-  });
-  const allAgents = [...base.agents, ...graphOnlyAgents];
+  const allAgents = base.agents;
 
   const serverIdByLocalId = new Map(
     allAgents.flatMap((agent) => {
@@ -198,34 +132,28 @@ function buildSnapshot(
               source: source.id,
               target: target.id,
               kind: relationship.structure,
-              channelId: null,
+              label:
+                graph.relationshipDefinitions.find(
+                  (d) => d.relationshipDefinitionId === relationship.relationshipDefinitionId,
+                )?.name ?? relationship.structure,
+              channelId:
+                graph.channels.find((c) => c.relationshipId === relationship.relationshipId)
+                  ?.channelId ?? null,
             } as const,
-          ];
-    }),
-    ...graph.channels.flatMap((channel) => {
-      const source = allAgents.find(
-        (agent) => serverIdByLocalId.get(agent.id) === channel.agentAId,
-      );
-      const target = allAgents.find(
-        (agent) => serverIdByLocalId.get(agent.id) === channel.agentBId,
-      );
-      return source === undefined || target === undefined
-        ? []
-        : [
-            {
-              id: `channel:${channel.channelId}`,
-              source: source.id,
-              target: target.id,
-              kind: "coordination" as const,
-              channelId: channel.channelId,
-            },
           ];
     }),
   ];
   const agents = layoutHarnessCanvasAgents(allAgents, { topInset: 280, edges });
   const channels: ReadonlyArray<HarnessCanvasChannel> = graph.channels.flatMap((channel) => {
-    const source = allAgents.find((agent) => serverIdByLocalId.get(agent.id) === channel.agentAId);
-    const target = allAgents.find((agent) => serverIdByLocalId.get(agent.id) === channel.agentBId);
+    const relationship = graph.relationships.find(
+      (r) => r.relationshipId === channel.relationshipId,
+    );
+    const source = allAgents.find(
+      (agent) => serverIdByLocalId.get(agent.id) === relationship?.sourceAgentId,
+    );
+    const target = allAgents.find(
+      (agent) => serverIdByLocalId.get(agent.id) === relationship?.targetAgentId,
+    );
     if (source === undefined || target === undefined) return [];
     return [
       {
@@ -233,17 +161,8 @@ function buildSnapshot(
         sourceAgentId: source.id,
         targetAgentId: target.id,
         topic: channel.topic,
-        state: channel.status,
-        revision: Math.max(channel.revisionA, channel.revisionB),
         messageCount: channel.messageCount,
         transcript: [],
-        decisions: channel.decisions.map((text, index) => ({
-          id: `${channel.channelId}:decision:${index}`,
-          text,
-          revision: channel.convergenceRound,
-          createdAt: channel.updatedAt,
-        })),
-        lastSyncedAt: channel.status === "aligned" ? channel.updatedAt : null,
       },
     ];
   });
@@ -294,7 +213,7 @@ export default function HarnessWorkspace() {
   });
   const openChannel = useAtomCommand(harnessGraphOpenChannel, { reportFailure: false });
   const getChannel = useAtomCommand(harnessGraphGetChannel, { reportFailure: false });
-  const setChannelStatus = useAtomCommand(harnessGraphSetChannelStatus, { reportFailure: false });
+  const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
   const registerAgent = useAtomCommand(harnessGraphRegisterAgent, { reportFailure: false });
   const sendCoordination = useAtomCommand(harnessGraphSendCoordination, { reportFailure: false });
 
@@ -322,20 +241,62 @@ export default function HarnessWorkspace() {
     [environmentId],
   );
 
+  const createGraphThread = useCallback(
+    async (projectId: HarnessCanvasAgent["projectId"], title: string) => {
+      if (environmentId === null) return null;
+      const result = await newThread(scopeProjectRef(environmentId, projectId), {
+        reuseExistingDraft: false,
+        envMode: "local",
+      });
+      if (!result) return null;
+      const state = useComposerDraftStore.getState();
+      const draft = state.getDraftSession(result.draftId);
+      if (!draft) return null;
+      const composer = state.getComposerDraft(result.draftId);
+      const project = projects.find((p) => p.environmentId === environmentId && p.id === projectId);
+      const modelSelection = (composer?.activeProvider
+        ? composer.modelSelectionByProvider[composer.activeProvider]
+        : undefined) ??
+        project?.defaultModelSelection ?? {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: DEFAULT_MODEL,
+        };
+      const created = await createThread({
+        environmentId,
+        input: {
+          threadId: result.threadId,
+          projectId,
+          title,
+          modelSelection,
+          runtimeMode: draft.runtimeMode,
+          interactionMode: draft.interactionMode,
+          branch: draft.branch,
+          worktreePath: draft.worktreePath,
+          createdAt: draft.createdAt,
+        },
+      });
+      const error = commandError(created);
+      if (error) throw error;
+      markPromotedDraftThreadByRef(scopeThreadRef(environmentId, result.threadId));
+      await navigate({
+        to: "/$environmentId/$threadId",
+        params: { environmentId, threadId: result.threadId },
+      });
+      return result;
+    },
+    [createThread, environmentId, navigate, newThread, projects],
+  );
+
   const actions = useMemo<HarnessCanvasActions | null>(() => {
     if (environmentId === null) return null;
     return {
       createAgent: async () => {
         if (latestProject === undefined) return;
-        const result = await newThread(scopeProjectRef(environmentId, latestProject.id), {
-          reuseExistingDraft: false,
-        });
+        const result = await createGraphThread(latestProject.id, "New agent");
         if (result === null) return;
         await run(registerAgent, {
-          agentId: result.threadId as unknown as HarnessAgentId,
+          agentId: HarnessAgentId.make(result.threadId),
           threadId: result.threadId,
-          projectId: latestProject.id,
-          displayName: "New Codex agent",
           kind: "root" as const,
           roleDefinitionId: defaultRoleId(),
         });
@@ -345,28 +306,16 @@ export default function HarnessWorkspace() {
         if (parent === undefined) return;
         const parentServerId = serverAgentId(agentId);
         if (parentServerId === null) return;
-        const parentRoleDefinitionId = graph?.agents.find(
-          (agent) => agent.agentId === parentServerId,
-        )?.roleDefinitionId;
-        const relationshipDefinitionId = relationshipDefinitionIdFor(
-          graph,
-          parentRoleDefinitionId ?? defaultRoleId(),
-          defaultRoleId(),
-        );
-        if (relationshipDefinitionId === null) return;
-        const result = await newThread(scopeProjectRef(environmentId, parent.projectId), {
-          reuseExistingDraft: false,
-        });
+        const relationshipDefinitionId = HarnessRelationshipDefinitionId.make("builtin:delegation");
+        const result = await createGraphThread(parent.projectId, "New agent");
         if (result === null) return;
-        const childServerId = result.threadId as unknown as HarnessAgentId;
+        const childServerId = HarnessAgentId.make(result.threadId);
         await run(registerAgent, {
           agentId: childServerId,
           threadId: result.threadId,
-          projectId: parent.projectId,
-          displayName: "Delegated agent",
           kind: "delegated" as const,
           roleDefinitionId: defaultRoleId(),
-          parentAgentId: parentServerId,
+          spawnedByAgentId: parentServerId,
         });
         await run(upsertRelationship, {
           sourceAgentId: parentServerId,
@@ -379,58 +328,48 @@ export default function HarnessWorkspace() {
         const parent = snapshot.agents.find((agent) => agent.id === agentId);
         const parentServerId = serverAgentId(agentId);
         if (parent === undefined || parentServerId === null) return;
-        const parentRoleDefinitionId = graph?.agents.find(
-          (agent) => agent.agentId === parentServerId,
-        )?.roleDefinitionId;
-        const relationshipDefinitionId = relationshipDefinitionIdFor(
-          graph,
-          parentRoleDefinitionId ?? defaultRoleId(),
-          defaultRoleId(),
-        );
-        if (relationshipDefinitionId === null) return;
-        const result = await newThread(scopeProjectRef(environmentId, parent.projectId), {
-          reuseExistingDraft: false,
-        });
+        const result = await createGraphThread(parent.projectId, "Side chat");
         if (result === null) return;
-        const sidechatServerId = result.threadId as unknown as HarnessAgentId;
+        const sidechatServerId = HarnessAgentId.make(result.threadId);
         await run(registerAgent, {
           agentId: sidechatServerId,
           threadId: result.threadId,
-          projectId: parent.projectId,
-          displayName: "Side chat",
           kind: "sidechat" as const,
           roleDefinitionId: defaultRoleId(),
-          parentAgentId: parentServerId,
+          spawnedByAgentId: parentServerId,
         });
         await run(upsertRelationship, {
           sourceAgentId: parentServerId,
           targetAgentId: sidechatServerId,
           structure: "sidechat" as const,
-          relationshipDefinitionId,
+          relationshipDefinitionId: HarnessRelationshipDefinitionId.make("builtin:sidechat"),
           forkedFromTurnId: completedTurnId as TurnId,
         });
       },
-      connect: async (sourceAgentId, targetAgentId) => {
+      connect: async (sourceAgentId, targetAgentId, definitionId) => {
         const source = serverAgentId(sourceAgentId);
         const target = serverAgentId(targetAgentId);
         if (source === null || target === null || source === target) return;
-        const sourceAgent = graph?.agents.find((agent) => agent.agentId === source);
-        const targetAgent = graph?.agents.find((agent) => agent.agentId === target);
-        if (sourceAgent === undefined || targetAgent === undefined) return;
-        const relationshipDefinitionId = relationshipDefinitionIdFor(
-          graph,
-          sourceAgent.roleDefinitionId,
-          targetAgent.roleDefinitionId,
-        );
-        if (relationshipDefinitionId === null) return;
+        const relationshipDefinitionId = HarnessRelationshipDefinitionId.make(definitionId);
+        const relationshipId = HarnessRelationshipId.make(randomUUID());
         await run(upsertRelationship, {
           sourceAgentId: source,
           targetAgentId: target,
           structure: "sidechat" as const,
           relationshipDefinitionId,
-          topic: "Shared work",
+          topic:
+            graph?.relationshipDefinitions.find(
+              (d) => d.relationshipDefinitionId === relationshipDefinitionId,
+            )?.name ?? "Shared work",
+          relationshipId,
         });
-        await run(openChannel, { agentAId: source, agentBId: target, topic: "Shared work" });
+        await run(openChannel, {
+          relationshipId,
+          topic:
+            graph?.relationshipDefinitions.find(
+              (d) => d.relationshipDefinitionId === relationshipDefinitionId,
+            )?.name ?? "Shared work",
+        });
       },
       loadChannel: async (channelId) => {
         const result = await getChannel({
@@ -442,34 +381,15 @@ export default function HarnessWorkspace() {
           graph?.agents.flatMap((serverAgent) => {
             const local = snapshot.agents.find(
               (agent) =>
-                agent.threadId === serverAgent.threadId &&
+                serverAgent.backing.kind === "thread" &&
+                agent.threadId === serverAgent.backing.threadId &&
                 agent.projectId === serverAgent.projectId,
             );
             return local === undefined ? [] : [[serverAgent.agentId, local.id] as const];
           }) ?? [],
         );
-        return hydrateCanvasChannel(result.value, localIdByServerId);
+        return hydrateCanvasChannel(result.value, localIdByServerId, graph);
       },
-      syncChannel: async (channelId) =>
-        run(setChannelStatus, {
-          channelId: channelId as HarnessChannelId,
-          status: "aligned" as const,
-        }),
-      pauseChannel: async (channelId) =>
-        run(setChannelStatus, {
-          channelId: channelId as HarnessChannelId,
-          status: "paused" as const,
-        }),
-      resumeChannel: async (channelId) =>
-        run(setChannelStatus, {
-          channelId: channelId as HarnessChannelId,
-          status: "syncing" as const,
-        }),
-      disconnectChannel: async (channelId) =>
-        run(setChannelStatus, {
-          channelId: channelId as HarnessChannelId,
-          status: "paused" as const,
-        }),
       sendCoordination: async (channelId, body) => {
         const channel = snapshot.channels.find((entry) => entry.id === channelId);
         if (channel === undefined) return;
@@ -480,8 +400,6 @@ export default function HarnessWorkspace() {
           channelId: graphChannel.channelId,
           senderAgentId,
           authorKind: "user" as const,
-          kind: "update" as const,
-          topic: graphChannel.topic,
           body,
           deduplicationKey: `user:${randomUUID()}`,
         });
@@ -491,12 +409,11 @@ export default function HarnessWorkspace() {
     environmentId,
     latestProject,
     getChannel,
-    newThread,
+    createGraphThread,
     openChannel,
     registerAgent,
     run,
     sendCoordination,
-    setChannelStatus,
     serverAgentId,
     graph,
     snapshot.agents,
@@ -525,6 +442,12 @@ export default function HarnessWorkspace() {
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
       <HarnessCanvas
         snapshot={snapshot}
+        relationshipDefinitions={
+          graph?.relationshipDefinitions.map((definition) => ({
+            id: definition.relationshipDefinitionId,
+            name: definition.name,
+          })) ?? []
+        }
         actions={actions}
         onSelectAgent={onSelectAgent}
         className="min-h-0"

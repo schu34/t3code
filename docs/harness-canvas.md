@@ -1,70 +1,17 @@
-# Harness canvas design
+# Agent canvas
 
-The Harness landing page is a graph view over the existing T3 Code thread
-surface. A node is an agent backed by a thread; edges describe delegation,
-side chats, or a coordination channel.
+The landing page shows project threads and supported provider-native children as a graph.
+Select a thread-backed agent to open its chat, or a native child to inspect its live
+transcript in the parent thread's Agents panel. Native children are inspect-only.
 
-## Rough layout
+Use Roles & relationships to author reusable instructions for this environment and
+assign roles to thread-backed agents. A role applies to that thread's turns. Choose
+a relationship explicitly when connecting agents; its request and response instructions
+belong to that interaction, not every ordinary turn of either agent.
 
-```text
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ Agent canvas   7 agents   Fit view   Expand all   Show archived   New agent │
-│ Projects: web 4   api 2   docs 1       Connect agents: [from] → [to]       │
-├───────────────────────────────────────────────┬─────────────────────────────┤
-│                                               │ Channel: Agent A ↔ Agent B   │
-│       ┌──────────────┐       delegates       │ Shared work                  │
-│       │ Agent A      │ ──────────────────┐   │ syncing · revision 2         │
-│       │ Working      │                   ▼   │ Transcript                   │
-│       │ In review    │             ┌────────┐  │  Agent A  test result...     │
-│       └──────────────┘             │Agent B │  │  Agent B  acknowledged...    │
-│              ╲ coordinates         │Blocked│  │ Shared decisions             │
-│               ╲                    └────────┘  │ [Send coordination update]  │
-│                ┌──────────────┐                 │ Sync · Pause · Disconnect  │
-│                │ Side chat    │                 └─────────────────────────────┘
-│                │ Idle         │
-│                └──────────────┘
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+Select a connection to view its ordered channel transcript and record coordination
+messages. Channels currently record messages; they do not automatically start agent
+turns or deliver provider replies. Provider-owned child transcripts remain separate.
 
-## Interaction rules
-
-- Click a node to open its backing thread or provider child panel. Draft nodes
-  reopen the draft composer; persisted thread-backed nodes use the regular
-  thread route.
-- Drag from a node handle, or use the connection selector, to create a
-  relationship and a `Shared work` coordination channel.
-- Dragging a node changes its position for the current canvas session only;
-  positions reset when the canvas is reopened. Collapsing a node hides
-  delegation descendants while leaving connected peers visible.
-- Each node shows two independent badges: execution (`Working`, `Blocked`,
-  `Waiting`, and so on) and delivery (`PR open`, `In review`, `Merged`).
-- Selecting a coordination edge opens the channel drawer. The drawer reads the
-  durable transcript, exposes decisions and revisions, and sends user updates
-  through the outbox.
-
-## Persistence model
-
-```mermaid
-erDiagram
-  HARNESS_AGENTS ||--o{ HARNESS_RELATIONSHIPS : source
-  HARNESS_AGENTS ||--o{ HARNESS_RELATIONSHIPS : target
-  HARNESS_ROLE_DEFINITIONS ||--o{ HARNESS_AGENTS : configures
-  HARNESS_RELATIONSHIP_DEFINITIONS ||--o{ HARNESS_RELATIONSHIPS : configures
-  HARNESS_AGENTS ||--o{ HARNESS_CHANNELS : participates
-  HARNESS_CHANNELS ||--o{ HARNESS_COORDINATION_MESSAGES : contains
-  HARNESS_COORDINATION_MESSAGES ||--o{ HARNESS_DELIVERIES : delivered_as
-```
-
-Agent roles and reusable directional relationship instructions, graph
-relationships, and coordination state live in the host SQLite database. Canvas
-positions are session-local. A graph revision invalidates live subscriptions,
-while channel messages and delivery attempts remain durable across reconnects.
-Acknowledgements compare each participant's view against the other
-participant's revision stream; convergence is capped at three rounds.
-
-## Next slice
-
-The current slice owns the graph protocol and local Harness thread creation.
-Provider-specific fork adapters, automatic outbox workers, and worktree-aware
-agent execution can plug into the existing channel and delivery tables without
-changing the canvas contract.
+Dragging and collapsing nodes affects only the current canvas session. Relationships,
+roles, and channel history survive reconnects; canvas positions do not.
