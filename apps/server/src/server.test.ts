@@ -5602,7 +5602,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             }).pipe(Effect.flip);
             assert.equal(origin._tag, "HarnessGraphValidationError");
             shells = shells.map((t) =>
-              t.id === relationship.sourceAgentId
+              t.id === ThreadId.make(relationship.sourceAgentId)
                 ? { ...t, title: "Renamed", settledOverride: "settled" as const }
                 : t,
             );
@@ -5611,7 +5611,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             assert.equal(agent.displayName, "Renamed");
             assert.equal(agent.status, "completed");
             assert.isFalse("threadId" in agent);
-            shells = shells.filter((t) => t.id !== relationship.sourceAgentId);
+            shells = shells.filter((t) => t.id !== ThreadId.make(relationship.sourceAgentId));
             const deleted = yield* client[WS_METHODS.harnessGraphRead]({});
             assert.isFalse(deleted.agents.some((a) => a.agentId === relationship.sourceAgentId));
             assert.equal(deleted.relationships.length, 1);
