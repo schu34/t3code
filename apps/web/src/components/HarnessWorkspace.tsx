@@ -514,13 +514,13 @@ export default function HarnessWorkspace() {
     <>
       <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
         <HarnessCanvas
-        snapshot={snapshot}
-        relationshipDefinitions={
-          graph?.relationshipDefinitions.map((definition) => ({
-            id: definition.relationshipDefinitionId,
-            name: definition.name,
-          })) ?? []
-        }
+          snapshot={snapshot}
+          relationshipDefinitions={
+            graph?.relationshipDefinitions.map((definition) => ({
+              id: definition.relationshipDefinitionId,
+              name: definition.name,
+            })) ?? []
+          }
           actions={actions}
           onSelectAgent={onSelectAgent}
           onEditDefinitions={() => setDefinitionDialogOpen(true)}

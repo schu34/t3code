@@ -9,7 +9,6 @@ import {
 } from "@t3tools/contracts";
 import { useState, type FormEvent } from "react";
 import { randomUUID } from "../lib/utils";
-import { relationshipDefinitionConflicts } from "../harnessDefinition.logic";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -55,8 +54,6 @@ export default function HarnessDefinitionDialog({
   const [agentToAssignId, setAgentToAssignId] = useState("");
   const [roleToAssignId, setRoleToAssignId] = useState<HarnessRoleDefinitionId | "">("");
   const [relationshipName, setRelationshipName] = useState("");
-  const [requesterRoleIds, setRequesterRoleIds] = useState<Array<HarnessRoleDefinitionId>>([]);
-  const [responderRoleIds, setResponderRoleIds] = useState<Array<HarnessRoleDefinitionId>>([]);
   const [requestInstructions, setRequestInstructions] = useState("");
   const [responseInstructions, setResponseInstructions] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -69,16 +66,8 @@ export default function HarnessDefinitionDialog({
   const relationships = graph?.relationshipDefinitions ?? [];
   const assignableAgents =
     graph?.agents.filter(
-      (agent) =>
-        agent.projectId === visibleProjectId &&
-        agent.threadId !== undefined &&
-        agent.backing?.kind !== "native",
+      (agent) => agent.projectId === visibleProjectId && agent.backing.kind === "thread",
     ) ?? [];
-  const hasPairConflict = relationshipDefinitionConflicts(
-    relationships,
-    requesterRoleIds,
-    responderRoleIds,
-  );
 
   const submitRole = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -101,13 +90,6 @@ export default function HarnessDefinitionDialog({
 
   const submitRelationship = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (requesterRoleIds.length === 0 || responderRoleIds.length === 0) {
-      return;
-    }
-    if (hasPairConflict) {
-      setError("A relationship already defines at least one of these role pairings.");
-      return;
-    }
     setIsSaving(true);
     setError(null);
     try {
@@ -116,18 +98,14 @@ export default function HarnessDefinitionDialog({
           "relationship:" + randomUUID(),
         ),
         name: relationshipName.trim(),
-        requesterRoleIds,
-        responderRoleIds,
         requestInstructions,
         responseInstructions,
       });
       setRelationshipName("");
-      setRequesterRoleIds([]);
-      setResponderRoleIds([]);
       setRequestInstructions("");
       setResponseInstructions("");
     } catch {
-      setError("Could not create this relationship. Check its name and role pairings.");
+      setError("Could not create this relationship. Check its name and try again.");
     } finally {
       setIsSaving(false);
     }
@@ -136,38 +114,24 @@ export default function HarnessDefinitionDialog({
   const submitRoleAssignment = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const agent = assignableAgents.find((candidate) => candidate.agentId === agentToAssignId);
-    if (agent === undefined || agent.threadId === undefined || roleToAssignId === "") return;
+    if (agent === undefined || agent.backing.kind !== "thread" || roleToAssignId === "") return;
     setIsSaving(true);
     setError(null);
     try {
       await onAssignRole({
         agentId: agent.agentId,
-        threadId: agent.threadId,
-        projectId: agent.projectId,
-        displayName: agent.displayName,
+        threadId: agent.backing.threadId,
         kind: agent.kind,
         roleDefinitionId: roleToAssignId,
-        ...(agent.parentAgentId === undefined ? {} : { parentAgentId: agent.parentAgentId }),
-        status: agent.status,
+        ...(agent.spawnedByAgentId === undefined
+          ? {}
+          : { spawnedByAgentId: agent.spawnedByAgentId }),
       });
     } catch {
       setError("Could not assign this role to the selected agent.");
     } finally {
       setIsSaving(false);
     }
-  };
-
-  const toggleRole = (
-    roleId: HarnessRoleDefinitionId,
-    selected: ReadonlyArray<HarnessRoleDefinitionId>,
-    update: (value: Array<HarnessRoleDefinitionId>) => void,
-  ) => {
-    update(
-      selected.includes(roleId)
-        ? selected.filter((selectedId) => selectedId !== roleId)
-        : [...selected, roleId],
-    );
-    setError(null);
   };
 
   return (
@@ -337,46 +301,6 @@ export default function HarnessDefinitionDialog({
                   required
                 />
               </div>
-              {roles.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  Create at least one role before defining a relationship.
-                </p>
-              ) : (
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {[
-                    {
-                      label: "Requesters",
-                      selected: requesterRoleIds,
-                      update: setRequesterRoleIds,
-                    },
-                    {
-                      label: "Responders",
-                      selected: responderRoleIds,
-                      update: setResponderRoleIds,
-                    },
-                  ].map((side) => (
-                    <fieldset key={side.label} className="grid content-start gap-2">
-                      <legend className="text-sm font-medium">{side.label}</legend>
-                      {roles.map((role) => (
-                        <label
-                          key={role.roleDefinitionId}
-                          className="flex items-center gap-2 rounded-md border px-2.5 py-2 text-sm"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={side.selected.includes(role.roleDefinitionId)}
-                            onChange={() =>
-                              toggleRole(role.roleDefinitionId, side.selected, side.update)
-                            }
-                            disabled={isSaving}
-                          />
-                          {role.name}
-                        </label>
-                      ))}
-                    </fieldset>
-                  ))}
-                </div>
-              )}
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="grid content-start gap-2">
                   <Label htmlFor="harness-request-instructions">When requesting</Label>
@@ -399,12 +323,7 @@ export default function HarnessDefinitionDialog({
                   />
                 </div>
               </div>
-              {hasPairConflict ? (
-                <p className="text-sm text-destructive" role="status">
-                  A relationship already covers at least one selected requester → responder pairing.
-                  Each role pairing can use only one relationship behavior.
-                </p>
-              ) : null}
+
               <div className="grid gap-2">
                 <h3 className="text-xs font-semibold text-muted-foreground">
                   Available relationships
@@ -421,32 +340,15 @@ export default function HarnessDefinitionDialog({
                     >
                       <p className="text-sm font-medium">{relationship.name}</p>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        {relationship.requesterRoleIds
-                          .map((id) => roles.find((role) => role.roleDefinitionId === id)?.name)
-                          .filter(Boolean)
-                          .join(", ")}{" "}
-                        →{" "}
-                        {relationship.responderRoleIds
-                          .map((id) => roles.find((role) => role.roleDefinitionId === id)?.name)
-                          .filter(Boolean)
-                          .join(", ")}
+                        {relationship.requestInstructions || "No request instructions"} →{" "}
+                        {relationship.responseInstructions || "No response instructions"}
                       </p>
                     </div>
                   ))
                 )}
               </div>
               <DialogFooter variant="bare" className="px-0">
-                <Button
-                  type="submit"
-                  disabled={
-                    isSaving ||
-                    relationshipName.trim().length === 0 ||
-                    requesterRoleIds.length === 0 ||
-                    responderRoleIds.length === 0 ||
-                    roles.length === 0 ||
-                    hasPairConflict
-                  }
-                >
+                <Button type="submit" disabled={isSaving || relationshipName.trim().length === 0}>
                   Create relationship
                 </Button>
               </DialogFooter>
