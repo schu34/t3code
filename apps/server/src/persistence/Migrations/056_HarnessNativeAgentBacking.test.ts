@@ -22,7 +22,7 @@ layer("056_HarnessNativeAgentBacking", (it) => {
         FROM pragma_table_info('harness_agents')
         WHERE name IN (
           'backing_kind', 'provider_name', 'provider_instance_id',
-          'provider_agent_id', 'parent_thread_id', 'capabilities_json'
+          'provider_agent_id', 'parent_thread_id', 'native_display_name', 'native_status'
         )
         ORDER BY name
       `;
@@ -37,7 +37,8 @@ layer("056_HarnessNativeAgentBacking", (it) => {
         nativeColumns.map((column) => column.name),
         [
           "backing_kind",
-          "capabilities_json",
+          "native_display_name",
+          "native_status",
           "parent_thread_id",
           "provider_agent_id",
           "provider_instance_id",

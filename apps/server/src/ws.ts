@@ -3749,7 +3749,17 @@ const makeWsRpcLayer = (
               const initial = yield* graphStore.read(input);
               const nativeChanges = domainEvents.pipe(
                 Stream.filter((event) => {
-                  if (event.type !== "thread.activity-appended") return event.type.startsWith("thread.");
+                  if (event.type !== "thread.activity-appended")
+                    return [
+                      "thread.created",
+                      "thread.deleted",
+                      "thread.archived",
+                      "thread.unarchived",
+                      "thread.settled",
+                      "thread.unsettled",
+                      "thread.meta-updated",
+                      "thread.session-set",
+                    ].includes(event.type);
                   const activity = event.payload.activity;
                   if (
                     activity.kind === "task.started" ||

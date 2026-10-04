@@ -6,9 +6,11 @@ import {
   HarnessRelationshipDefinitionId,
   HarnessRelationshipId,
   HarnessRoleDefinitionId,
+  ProviderInstanceId,
   ThreadId,
   TurnId,
   type HarnessAgentMetadata,
+  type HarnessAgentStatus,
   type HarnessCreateRelationshipDefinitionInput,
   type HarnessCreateRoleDefinitionInput,
   type HarnessGraphReadInput,
@@ -21,6 +23,9 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as PubSub from "effect/PubSub";
+import * as Schema from "effect/Schema";
+import { foldHarnessNativeActivities } from "./harnessGraph.ts";
+const decodePayload = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 
@@ -29,8 +34,16 @@ const invalid = (detail: string) =>
   new HarnessGraphValidationError({ operation: "harness-graph", detail });
 type AgentMetadataRow = {
   agent_id: string;
-  thread_id: string;
+  thread_id: string | null;
+  backing_kind: "thread" | "native";
+  provider_name: string | null;
+  provider_instance_id: string | null;
+  provider_agent_id: string | null;
+  parent_thread_id: string | null;
+  native_display_name: string | null;
+  native_status: HarnessAgentStatus | null;
   kind: HarnessAgentMetadata["kind"];
+
   role_definition_id: string;
   spawned_by_agent_id: string | null;
   created_at: string;
@@ -39,7 +52,17 @@ type AgentMetadataRow = {
 const toAgentMetadata = (row: AgentMetadataRow) =>
   ({
     agentId: HarnessAgentId.make(row.agent_id),
-    backing: { kind: "thread" as const, threadId: ThreadId.make(row.thread_id) },
+    backing: row.backing_kind === "native"
+      ? {
+          kind: "native" as const,
+          provider: row.provider_name!,
+          providerAgentId: row.provider_agent_id!,
+          parentThreadId: ThreadId.make(row.parent_thread_id!),
+          ...(row.provider_instance_id === null
+            ? {}
+            : { providerInstanceId: ProviderInstanceId.make(row.provider_instance_id) }),
+        }
+      : { kind: "thread" as const, threadId: ThreadId.make(row.thread_id!) },
     kind: row.kind,
     roleDefinitionId: HarnessRoleDefinitionId.make(row.role_definition_id),
     ...(row.spawned_by_agent_id === null
@@ -129,8 +152,13 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
         *
       FROM harness_agents
     `;
+    const rowsById = new Map(rows.map((row) => [row.agent_id, row]));
     for (const row of rows) {
-      if (!byId.has(ThreadId.make(row.thread_id))) {
+      if (
+        !byId.has(
+          ThreadId.make(row.backing_kind === "native" ? row.parent_thread_id! : row.thread_id!),
+        )
+      ) {
         yield* sql`
           DELETE
           FROM harness_agents
@@ -139,9 +167,18 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
         yield* bump;
       }
     }
+    const childRows = yield* sql<{
+      thread_id: string;
+    }>`
+      SELECT
+        thread_id
+      FROM projection_threads
+      WHERE thread_kind = 'provider-child'
+    `;
+    const childIds = new Set(childRows.map((row) => row.thread_id));
     const existing = new Set(rows.map((row) => row.thread_id));
     for (const thread of byId.values()) {
-      if (existing.has(thread.id)) continue;
+      if (existing.has(thread.id) || childIds.has(thread.id)) continue;
       const now = yield* nowIso;
       yield* sql`
         INSERT OR IGNORE INTO harness_agents (
@@ -163,6 +200,136 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
       `;
       yield* bump;
     }
+    const activityRows = yield* sql<{
+      thread_id: string;
+      kind: string;
+      payload_json: string;
+      created_at: string;
+    }>`
+      SELECT
+        thread_id,
+        kind,
+        payload_json,
+        created_at
+      FROM projection_thread_activities
+      WHERE kind IN (
+        'task.started',
+        'task.progress',
+        'task.updated',
+        'task.completed'
+      )
+      OR json_extract(payload_json, '$.itemType') = 'collab_agent_tool_call'
+      ORDER BY
+        thread_id,
+        sequence,
+        created_at,
+        activity_id
+    `;
+    const activities = new Map<
+      string,
+      Array<{ kind: string; payload: unknown; createdAt: string }>
+    >();
+    for (const row of activityRows) {
+      let payload: unknown;
+      try {
+        payload = decodePayload(row.payload_json);
+      } catch {
+        continue;
+      }
+      const group = activities.get(row.thread_id) ?? [];
+      group.push({ kind: row.kind, payload, createdAt: row.created_at });
+      activities.set(row.thread_id, group);
+    }
+    for (const [threadId, group] of activities) {
+      const parent = byId.get(ThreadId.make(threadId));
+      if (!parent) continue;
+      const observations = foldHarnessNativeActivities(group);
+      const ids = new Map(
+        observations.map((o) => [o.providerAgentId, `native:${threadId}:${o.providerAgentId}`]),
+      );
+      // Insert all children before assigning nested creation origins.
+      for (const o of observations) {
+        const id = ids.get(o.providerAgentId)!;
+        const old = rowsById.get(id);
+        if (
+          old?.native_display_name === o.title &&
+          old.native_status === o.status &&
+          old.updated_at === o.observedAt
+        )
+          continue;
+        yield* sql`
+          INSERT INTO harness_agents (
+            agent_id,
+            kind,
+            role_definition_id,
+            created_at,
+            updated_at,
+            backing_kind,
+            provider_name,
+            provider_instance_id,
+            provider_agent_id,
+            parent_thread_id,
+            native_display_name,
+            native_status
+          )
+          VALUES (
+            ${id},
+            'delegated',
+            'builtin:general',
+            ${o.observedAt},
+            ${o.observedAt},
+            'native',
+            ${parent.session?.providerName ?? "native"},
+            ${parent.session?.providerInstanceId ?? null},
+            ${o.providerAgentId},
+            ${threadId},
+            ${o.title},
+            ${o.status}
+          )
+          ON CONFLICT (agent_id)
+          DO UPDATE
+          SET
+            native_display_name = excluded.native_display_name,
+            native_status = excluded.native_status,
+            updated_at = excluded.updated_at
+        `;
+        yield* bump;
+      }
+      for (const o of observations) {
+        const id = ids.get(o.providerAgentId)!;
+        const creator =
+          (o.parentProviderAgentId === null ? undefined : ids.get(o.parentProviderAgentId)) ??
+          threadId;
+        if (creator === id) continue;
+        yield* sql`
+          UPDATE harness_agents
+          SET
+            spawned_by_agent_id = ${creator}
+          WHERE agent_id = ${id}
+          AND spawned_by_agent_id IS NULL
+        `;
+        yield* sql`
+          INSERT OR IGNORE INTO harness_relationships (
+            relationship_id,
+            source_agent_id,
+            target_agent_id,
+            structure,
+            relationship_definition_id,
+            topic,
+            created_at
+          )
+          VALUES (
+            ${`native-delegation:${id}`},
+            ${creator},
+            ${id},
+            'delegation',
+            'builtin:delegation',
+            'Provider native subagent',
+            ${o.observedAt}
+          )
+        `;
+      }
+    }
     return byId;
   });
   const agents = Effect.gen(function* () {
@@ -176,7 +343,9 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
         agent_id
     `;
     return rows.flatMap((row) => {
-      const thread = byId.get(ThreadId.make(row.thread_id));
+      const thread = byId.get(
+        ThreadId.make(row.backing_kind === "native" ? row.parent_thread_id! : row.thread_id!),
+      );
       if (!thread) return [];
       const status =
         thread.session?.status === "error"
@@ -189,10 +358,17 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
       return [
         {
           ...toAgentMetadata(row),
+          backing: row.backing_kind === "native"
+            ? {
+                ...toAgentMetadata(row).backing,
+                capabilities: ["inspect" as const],
+              }
+            : { kind: "thread" as const, threadId: thread.id },
           projectId: thread.projectId,
-          displayName: thread.title,
-          status,
-          updatedAt: thread.updatedAt,
+          displayName: row.backing_kind === "native" ? row.native_display_name! : thread.title,
+          status: row.backing_kind === "native" ? row.native_status! : status,
+          updatedAt: row.backing_kind === "native" ? row.updated_at : thread.updatedAt,
+
         },
       ];
     });
@@ -203,7 +379,8 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
     return agent;
   });
   const relationships = Effect.gen(function* () {
-    const rows = yield* sql<RelationshipRow>`
+    const rows =
+      yield* sql<RelationshipRow>`
         SELECT
           *
         FROM harness_relationships
@@ -318,7 +495,8 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
     yield* sync;
     const row = (yield* channelRows).find((row) => row.channel_id === id);
     if (!row) return yield* invalid("The channel does not exist.");
-    const messages = yield* sql<MessageRow>`
+    const messages =
+      yield* sql<MessageRow>`
         SELECT
           *
         FROM harness_coordination_messages
@@ -385,7 +563,8 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
         const byId = yield* threads;
         if (!byId.has(input.threadId))
           return yield* invalid("Create the backing thread before registering an agent.");
-        const roles = yield* sql`
+        const roles =
+          yield* sql`
             SELECT
               role_definition_id
             FROM harness_role_definitions
@@ -393,6 +572,7 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
           `;
         if (roles.length === 0) return yield* invalid("The role definition does not exist.");
         const existing = (yield* sql<AgentMetadataRow>`
+
             SELECT
               *
             FROM harness_agents
@@ -416,6 +596,7 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
               return yield* invalid("Creation origin cannot contain a cycle.");
             visited.add(ancestor);
             const row: AgentMetadataRow | undefined = (yield* sql<AgentMetadataRow>`
+
                 SELECT
                   *
                 FROM harness_agents
@@ -468,7 +649,8 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
     const target = yield* requireAgent(input.targetAgentId);
     if (source.projectId !== target.projectId)
       return yield* invalid("Relationship endpoints must belong to the same project.");
-    const definitions = yield* sql`
+    const definitions =
+      yield* sql`
         SELECT
           relationship_definition_id
         FROM harness_relationship_definitions
@@ -477,7 +659,8 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
     if (definitions.length === 0)
       return yield* invalid("The relationship definition does not exist.");
     const id = input.relationshipId ?? HarnessRelationshipId.make(yield* crypto.randomUUIDv4);
-    const existing = (yield* sql<RelationshipRow>`
+    const existing =
+      (yield* sql<RelationshipRow>`
         SELECT
           *
         FROM harness_relationships
@@ -540,7 +723,8 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
   });
   const send = Effect.fnUntraced(function* (input: HarnessSendCoordinationMessageInput) {
     yield* sync;
-    const row = (yield* sql<RelationshipRow>`
+    const row =
+      (yield* sql<RelationshipRow>`
         SELECT
           r.*
         FROM harness_channels c
