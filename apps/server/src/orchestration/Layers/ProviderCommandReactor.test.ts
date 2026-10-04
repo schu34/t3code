@@ -632,22 +632,22 @@ describe("ProviderCommandReactor", () => {
             const now = "2026-01-01T00:00:00.000Z";
             yield* sql`
               INSERT INTO harness_role_definitions (
-                role_definition_id, project_id, name, instructions, created_at, updated_at
-              ) VALUES ('role-implementor', 'project-1', 'Implementor',
+                role_definition_id, name, instructions, created_at, updated_at
+              ) VALUES ('role-implementor', 'Implementor',
                 'Make small, tested changes.', ${now}, ${now})
             `;
             yield* sql`
               INSERT INTO harness_role_definitions (
-                role_definition_id, project_id, name, instructions, created_at, updated_at
-              ) VALUES ('role-reviewer', 'project-1', 'Reviewer',
+                role_definition_id, name, instructions, created_at, updated_at
+              ) VALUES ('role-reviewer', 'Reviewer',
                 'Review carefully.', ${now}, ${now})
             `;
             yield* sql`
               INSERT INTO harness_relationship_definitions (
-                relationship_definition_id, project_id, name,
+                relationship_definition_id, name,
                 requester_role_ids_json, responder_role_ids_json,
                 request_instructions, response_instructions, created_at, updated_at
-              ) VALUES ('rel-review', 'project-1', 'Code review',
+              ) VALUES ('rel-review', 'Code review',
                 '["role-implementor"]', '["role-reviewer"]',
                 'Include the tradeoffs in the review request.',
                 'Identify correctness risks and missing tests.', ${now}, ${now})
