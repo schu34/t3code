@@ -4,6 +4,7 @@ import { HarnessRoleDefinitionId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { makeHarnessGraphStore } from "./harnessGraphStore.ts";
@@ -27,6 +28,7 @@ const testLayer = OrchestrationProjectionSnapshotQueryLive.pipe(
 
 const createdAt = "2026-10-04T00:00:00.000Z";
 const updatedAt = "2026-10-04T00:01:00.000Z";
+const encodePayload = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const seedParent = Effect.fnUntraced(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`
@@ -106,7 +108,7 @@ it.effect("derives native lifecycle changes while preserving graph role and orig
       title: string,
       timestamp: string,
     ) {
-      const payload = JSON.stringify({ taskId: "child", agentKind: "agent", title, status });
+      const payload = encodePayload({ taskId: "child", agentKind: "agent", title, status });
       yield* sql`
         INSERT INTO projection_thread_activities (
           activity_id,
