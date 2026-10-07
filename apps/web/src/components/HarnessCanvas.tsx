@@ -1,0 +1,674 @@
+import "@xyflow/react/dist/style.css";
+
+import {
+  Background,
+  Controls,
+  Handle,
+  MarkerType,
+  MiniMap,
+  Panel,
+  Position,
+  ReactFlow,
+  ReactFlowProvider,
+  useEdgesState,
+  useNodesState,
+  useReactFlow,
+  type Connection,
+  type Edge,
+  type Node,
+  type NodeProps,
+} from "@xyflow/react";
+import {
+  ArchiveIcon,
+  ArrowDownToLineIcon,
+  BotIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  CircleDotIcon,
+  LayoutDashboardIcon,
+  Link2Icon,
+  MessageCircleIcon,
+  PlusIcon,
+  XIcon,
+  ZapIcon,
+} from "lucide-react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
+
+import { PullRequestGlyph } from "./pullRequest/pullRequestIcons";
+const GitPullRequestIcon = PullRequestGlyph.pullRequest;
+import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
+import { cn } from "~/lib/utils";
+import {
+  type HarnessCanvasActions,
+  type HarnessCanvasAgent,
+  type HarnessCanvasEdge,
+  type HarnessCanvasSnapshot,
+  type HarnessEdgeKind,
+  mergeHarnessCanvasNodeState,
+  selectHarnessCanvasNodeSelection,
+  selectHarnessCanvasGraph,
+} from "../harnessCanvas.logic";
+
+export interface HarnessCanvasProps {
+  readonly snapshot: HarnessCanvasSnapshot;
+  readonly actions: HarnessCanvasActions | null;
+  readonly onSelectAgent: (agent: HarnessCanvasAgent) => void;
+  readonly onCloseChat?: () => void;
+  readonly selectedAgentId?: string | null;
+  readonly className?: string;
+}
+
+type HarnessFlowNodeData = {
+  readonly agent: HarnessCanvasAgent;
+  readonly collapsed: boolean;
+  readonly onSelect: (agent: HarnessCanvasAgent) => void;
+  readonly onCreateChild: (agentId: string) => void;
+  readonly onForkSidechat: (agentId: string, completedTurnId: string) => void;
+  readonly onToggleCollapsed: (agentId: string) => void;
+  readonly onToggleDetails: (agentId: string) => void;
+};
+
+type HarnessFlowNode = Node<HarnessFlowNodeData, "harness-agent">;
+
+const edgeKindLabels: Record<HarnessEdgeKind, string> = {
+  delegation: "delegates",
+  sidechat: "side chat",
+  coordination: "coordinates",
+};
+
+const edgeKindClasses: Record<HarnessEdgeKind, string> = {
+  delegation: "stroke-foreground/35",
+  sidechat: "stroke-violet-400/80",
+  coordination: "stroke-sky-400/80",
+};
+
+const runtimeStateLabels = {
+  queued: "Queued",
+  working: "Working",
+  waiting: "Waiting",
+  blocked: "Blocked",
+  idle: "Idle",
+  stopped: "Stopped",
+  failed: "Failed",
+} as const;
+
+const deliveryStageLabels = {
+  implementing: "Implementing",
+  "pr-open": "PR open",
+  "in-review": "In review",
+  "changes-requested": "Changes requested",
+  merged: "Merged",
+} as const;
+
+function runtimeBadgeVariant(
+  state: HarnessCanvasAgent["runtimeState"],
+): "default" | "secondary" | "success" | "warning" | "error" | "outline" {
+  switch (state) {
+    case "working":
+      return "success";
+    case "waiting":
+    case "blocked":
+      return "warning";
+    case "failed":
+      return "error";
+    case "idle":
+      return "secondary";
+    default:
+      return "outline";
+  }
+}
+
+function deliveryBadgeVariant(
+  stage: HarnessCanvasAgent["deliveryStage"],
+): "default" | "secondary" | "success" | "warning" | "error" | "outline" {
+  switch (stage) {
+    case "merged":
+      return "success";
+    case "in-review":
+      return "default";
+    case "changes-requested":
+      return "warning";
+    case "pr-open":
+      return "secondary";
+    default:
+      return "outline";
+  }
+}
+
+function FlowAgentNode({ data, selected }: NodeProps<HarnessFlowNode>) {
+  const { agent } = data;
+  return (
+    <div
+      className={cn(
+        "group relative w-[240px] overflow-visible rounded-lg border bg-card/95 text-card-foreground shadow-lg/5 backdrop-blur-sm transition-[border-color,box-shadow]",
+        selected ? "border-primary/75 shadow-primary/15 shadow-lg" : "border-border/75",
+      )}
+      data-harness-agent-node="true"
+      data-agent-id={agent.id}
+    >
+      <Handle
+        id="top-target"
+        type="target"
+        position={Position.Top}
+        className="!size-2 !border-2 !border-background !bg-muted-foreground/70 opacity-0 transition-opacity group-hover:opacity-100"
+        aria-label={`Connect into ${agent.title}`}
+      />
+      <Handle
+        id="left-target"
+        type="target"
+        position={Position.Left}
+        className="!size-2 !border-2 !border-background !bg-muted-foreground/70 opacity-0 transition-opacity group-hover:opacity-100"
+        aria-label={`Connect into ${agent.title}`}
+      />
+      <Handle
+        id="right-source"
+        type="source"
+        position={Position.Right}
+        className="!size-2 !border-2 !border-background !bg-primary opacity-0 transition-opacity group-hover:opacity-100"
+        aria-label={`Connect from ${agent.title}`}
+      />
+      <Handle
+        id="bottom-source"
+        type="source"
+        position={Position.Bottom}
+        className="!size-2 !border-2 !border-background !bg-primary opacity-0 transition-opacity group-hover:opacity-100"
+        aria-label={`Connect from ${agent.title}`}
+      />
+
+      <button
+        type="button"
+        className="nodrag nowheel flex w-full flex-col gap-1.5 p-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        onClick={() => data.onSelect(agent)}
+        aria-label={`Open ${agent.title} chat`}
+      >
+        <span className="flex items-start justify-between gap-2">
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+              <BotIcon className="size-4" aria-hidden="true" />
+            </span>
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-semibold">{agent.title}</span>
+              <span className="block truncate text-[11px] text-muted-foreground">
+                {agent.projectTitle}
+              </span>
+            </span>
+          </span>
+          {agent.unreadCount > 0 ? (
+            <Badge size="sm" variant="info" aria-label={`${agent.unreadCount} unread updates`}>
+              {agent.unreadCount}
+            </Badge>
+          ) : null}
+        </span>
+
+        <span className="line-clamp-2 min-h-7 text-xs leading-snug text-muted-foreground">
+          {agent.activity}
+        </span>
+
+        <span className="flex flex-wrap gap-1">
+          <Badge size="sm" variant={runtimeBadgeVariant(agent.runtimeState)}>
+            <CircleDotIcon className="size-3" aria-hidden="true" />
+            {runtimeStateLabels[agent.runtimeState]}
+          </Badge>
+          <Badge size="sm" variant={deliveryBadgeVariant(agent.deliveryStage)}>
+            {agent.deliveryStage === "implementing" ? (
+              <ZapIcon className="size-3" aria-hidden="true" />
+            ) : (
+              <GitPullRequestIcon className="size-3" aria-hidden="true" />
+            )}
+            {deliveryStageLabels[agent.deliveryStage]}
+          </Badge>
+        </span>
+      </button>
+
+      <div className="nodrag nowheel flex items-center justify-between border-t border-border/60 px-2 py-1">
+        <div className="flex items-center gap-0.5">
+          <Button
+            size="icon-micro"
+            variant="ghost-muted"
+            aria-label={
+              data.collapsed
+                ? `Expand ${agent.title} descendants`
+                : `Collapse ${agent.title} descendants`
+            }
+            onClick={() => data.onToggleCollapsed(agent.id)}
+          >
+            {data.collapsed ? (
+              <ChevronRightIcon aria-hidden="true" />
+            ) : (
+              <ChevronDownIcon aria-hidden="true" />
+            )}
+          </Button>
+          {agent.latestCompletedTurnId ? (
+            <Button
+              size="icon-micro"
+              variant="ghost-muted"
+              aria-label={`Fork a side chat from ${agent.title}`}
+              onClick={() => data.onForkSidechat(agent.id, agent.latestCompletedTurnId ?? "")}
+            >
+              <MessageCircleIcon aria-hidden="true" />
+            </Button>
+          ) : null}
+        </div>
+        <Button
+          size="icon-micro"
+          variant="ghost-muted"
+          aria-label={`Create child agent under ${agent.title}`}
+          onClick={() => data.onCreateChild(agent.id)}
+        >
+          <PlusIcon aria-hidden="true" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+const nodeTypes = { "harness-agent": memo(FlowAgentNode) };
+
+function makeFlowNodes(
+  agents: ReadonlyArray<HarnessCanvasAgent>,
+  collapsedAgentIds: ReadonlySet<string>,
+  callbacks: Pick<
+    HarnessFlowNodeData,
+    "onSelect" | "onCreateChild" | "onForkSidechat" | "onToggleCollapsed" | "onToggleDetails"
+  >,
+): HarnessFlowNode[] {
+  return agents.map((agent) => ({
+    id: agent.id,
+    type: "harness-agent",
+    position: agent.position ?? { x: 80, y: 80 },
+    data: {
+      agent,
+      collapsed: collapsedAgentIds.has(agent.id),
+      ...callbacks,
+    },
+  }));
+}
+
+function edgeStyle(kind: HarnessEdgeKind): Pick<Edge, "style" | "className"> {
+  switch (kind) {
+    case "sidechat":
+      return {
+        className: edgeKindClasses[kind],
+        style: { strokeDasharray: "5 4", strokeWidth: 1.7 },
+      };
+    case "coordination":
+      return {
+        className: edgeKindClasses[kind],
+        style: { strokeDasharray: "2 3", strokeWidth: 2 },
+      };
+    default:
+      return { className: edgeKindClasses[kind], style: { strokeWidth: 1.5 } };
+  }
+}
+
+function makeFlowEdges(edges: ReadonlyArray<HarnessCanvasEdge>): Edge[] {
+  return edges.map((edge) => ({
+    id: edge.id,
+    source: edge.source,
+    target: edge.target,
+    ...(edge.kind === "delegation"
+      ? { sourceHandle: "bottom-source", targetHandle: "top-target" }
+      : {}),
+    label: edge.label ?? edgeKindLabels[edge.kind],
+    labelStyle: { fill: "var(--muted-foreground)", fontSize: 10, fontWeight: 500 },
+    labelBgStyle: { fill: "var(--background)", fillOpacity: 0.92 },
+    markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 },
+    data: { kind: edge.kind },
+    ...edgeStyle(edge.kind),
+  }));
+}
+
+function projectCounts(snapshot: HarnessCanvasSnapshot): ReadonlyArray<{
+  readonly title: string;
+  readonly count: number;
+}> {
+  const counts = new Map<string, number>();
+  for (const agent of snapshot.agents) {
+    counts.set(agent.projectTitle, (counts.get(agent.projectTitle) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([title, count]) => ({ title, count }))
+    .sort((left, right) => left.title.localeCompare(right.title));
+}
+
+function ConnectionSelector({
+  agents,
+  onConnect,
+  disabled,
+}: {
+  readonly agents: ReadonlyArray<HarnessCanvasAgent>;
+  readonly onConnect: (source: string, target: string) => void;
+  readonly disabled: boolean;
+}) {
+  const [source, setSource] = useState(agents[0]?.id ?? "");
+  const [target, setTarget] = useState(agents[1]?.id ?? agents[0]?.id ?? "");
+
+  const visibleSource = agents.some((agent) => agent.id === source) ? source : "";
+  const visibleTarget = agents.some((agent) => agent.id === target) ? target : "";
+  const canConnect =
+    visibleSource.length > 0 &&
+    visibleTarget.length > 0 &&
+    visibleSource !== visibleTarget &&
+    !disabled;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5" data-harness-connect-selector="true">
+      <label className="sr-only" htmlFor="harness-connect-source">
+        Agent to connect from
+      </label>
+      <select
+        id="harness-connect-source"
+        className="h-7 max-w-40 rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        value={visibleSource}
+        onChange={(event) => setSource(event.target.value)}
+        disabled={disabled}
+      >
+        <option value="">From agent…</option>
+        {agents.map((agent) => (
+          <option key={agent.id} value={agent.id}>
+            {agent.title}
+          </option>
+        ))}
+      </select>
+      <span className="text-xs text-muted-foreground" aria-hidden="true">
+        →
+      </span>
+      <label className="sr-only" htmlFor="harness-connect-target">
+        Agent to connect to
+      </label>
+      <select
+        id="harness-connect-target"
+        className="h-7 max-w-40 rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        value={visibleTarget}
+        onChange={(event) => setTarget(event.target.value)}
+        disabled={disabled}
+      >
+        <option value="">To agent…</option>
+        {agents.map((agent) => (
+          <option key={agent.id} value={agent.id}>
+            {agent.title}
+          </option>
+        ))}
+      </select>
+      <Button
+        size="xs"
+        variant="outline"
+        disabled={!canConnect}
+        onClick={() => {
+          if (!canConnect) return;
+          onConnect(visibleSource, visibleTarget);
+        }}
+      >
+        <Link2Icon aria-hidden="true" />
+        Connect
+      </Button>
+    </div>
+  );
+}
+
+function HarnessCanvasInner({
+  snapshot,
+  actions,
+  onSelectAgent,
+  selectedAgentId = null,
+  className,
+}: HarnessCanvasProps) {
+  const [showArchivedCompleted, setShowArchivedCompleted] = useState(true);
+  const [collapsedAgentIds, setCollapsedAgentIds] = useState<ReadonlySet<string>>(new Set());
+  const [showDetails, setShowDetails] = useState(false);
+  const [nodes, setNodes, onNodesChange] = useNodesState<HarnessFlowNode>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const { fitView } = useReactFlow();
+
+  const visibleSnapshot = useMemo(
+    () => selectHarnessCanvasGraph(snapshot, { collapsedAgentIds, showArchivedCompleted }),
+    [collapsedAgentIds, showArchivedCompleted, snapshot],
+  );
+  const projectGroups = useMemo(() => projectCounts(visibleSnapshot), [visibleSnapshot]);
+
+  const onCreateChild = useCallback(
+    (agentId: string) => {
+      if (actions) void actions.createChild(agentId);
+    },
+    [actions],
+  );
+  const onForkSidechat = useCallback(
+    (agentId: string, completedTurnId: string) => {
+      if (actions) void actions.forkSidechat(agentId, completedTurnId);
+    },
+    [actions],
+  );
+  const onToggleCollapsed = useCallback((agentId: string) => {
+    setCollapsedAgentIds((current) => {
+      const next = new Set(current);
+      if (next.has(agentId)) next.delete(agentId);
+      else next.add(agentId);
+      return next;
+    });
+  }, []);
+  const onToggleDetails = useCallback(
+    (agentId: string) => {
+      setShowDetails((current) => !current);
+      onSelectAgent(snapshot.agents.find((agent) => agent.id === agentId) ?? snapshot.agents[0]!);
+    },
+    [onSelectAgent, snapshot.agents],
+  );
+
+  const callbacks = useMemo(
+    () => ({
+      onSelect: onSelectAgent,
+      onCreateChild,
+      onForkSidechat,
+      onToggleCollapsed,
+      onToggleDetails,
+    }),
+    [onCreateChild, onForkSidechat, onSelectAgent, onToggleCollapsed, onToggleDetails],
+  );
+
+  useEffect(() => {
+    const nextNodes = makeFlowNodes(visibleSnapshot.agents, collapsedAgentIds, callbacks);
+    setNodes((current) => mergeHarnessCanvasNodeState(current, nextNodes));
+    setEdges(makeFlowEdges(visibleSnapshot.edges));
+  }, [
+    callbacks,
+    collapsedAgentIds,
+    setEdges,
+    setNodes,
+    visibleSnapshot.agents,
+    visibleSnapshot.edges,
+  ]);
+
+  const onConnect = useCallback(
+    (connection: Connection) => {
+      if (
+        !actions ||
+        !connection.source ||
+        !connection.target ||
+        connection.source === connection.target
+      ) {
+        return;
+      }
+      void actions.connect(connection.source, connection.target);
+    },
+    [actions],
+  );
+
+  const onNodeDragStop = useCallback(
+    (_event: MouseEvent | TouchEvent, node: HarnessFlowNode, _nodes: HarnessFlowNode[]) => {
+      if (!actions) return;
+      void actions.updatePosition({ agentId: node.id, position: node.position });
+    },
+    [actions],
+  );
+
+  const renderedNodes = useMemo(
+    () => selectHarnessCanvasNodeSelection(nodes, selectedAgentId),
+    [nodes, selectedAgentId],
+  );
+
+  return (
+    <div
+      className={cn(
+        "relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background",
+        className,
+      )}
+    >
+      <ReactFlow
+        nodes={renderedNodes}
+        edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onConnect={onConnect}
+        onNodeDragStop={onNodeDragStop}
+        nodeTypes={nodeTypes}
+        fitView
+        fitViewOptions={{ padding: 0.2, minZoom: 0.35, maxZoom: 1.15 }}
+        minZoom={0.2}
+        maxZoom={1.8}
+        nodesDraggable
+        nodesConnectable={actions !== null}
+        className="h-full w-full"
+        defaultEdgeOptions={{ type: "default" }}
+        aria-label="Harness agent canvas"
+      >
+        <Background gap={24} size={1} color="var(--border)" />
+        <Controls showInteractive={false} position="bottom-left" />
+        <MiniMap
+          className="max-sm:hidden"
+          nodeColor={(node) =>
+            node.id === selectedAgentId ? "var(--primary)" : "var(--muted-foreground)"
+          }
+          maskColor="color-mix(in srgb, var(--background) 78%, transparent)"
+          position="bottom-right"
+          pannable
+          zoomable
+        />
+
+        <Panel
+          position="top-left"
+          className="!m-4 !mt-3 flex max-w-[calc(100%-2rem)] flex-col gap-3"
+        >
+          <div className="surface-glass flex flex-wrap items-center gap-2 rounded-xl border border-border/70 px-3 py-2 shadow-sm">
+            <div className="me-1 flex items-center gap-2">
+              <LayoutDashboardIcon className="size-4 text-primary" aria-hidden="true" />
+              <span className="text-sm font-semibold">Agent canvas</span>
+              <span className="text-xs text-muted-foreground">
+                {visibleSnapshot.agents.length}{" "}
+                {visibleSnapshot.agents.length === 1 ? "agent" : "agents"}
+              </span>
+            </div>
+            <div className="h-4 w-px bg-border/75" aria-hidden="true" />
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() => fitView({ padding: 0.2, duration: 250 })}
+              aria-label="Fit all agents in view"
+            >
+              <ArrowDownToLineIcon className="rotate-180" aria-hidden="true" />
+              Fit view
+            </Button>
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() => {
+                setCollapsedAgentIds(new Set());
+                fitView({ padding: 0.2, duration: 250 });
+              }}
+              aria-label="Show all agent descendants"
+            >
+              <ChevronDownIcon aria-hidden="true" />
+              Expand all
+            </Button>
+            <Button
+              size="xs"
+              variant={showArchivedCompleted ? "secondary" : "ghost"}
+              onClick={() => setShowArchivedCompleted((current) => !current)}
+              aria-pressed={showArchivedCompleted}
+            >
+              <ArchiveIcon aria-hidden="true" />
+              {showArchivedCompleted ? "Hide archived" : "Show archived"}
+            </Button>
+            <Button
+              size="xs"
+              variant="default"
+              disabled={actions === null}
+              onClick={() => {
+                if (actions) void actions.createAgent();
+              }}
+            >
+              <PlusIcon aria-hidden="true" />
+              New Codex agent
+            </Button>
+          </div>
+
+          <div className="surface-glass flex flex-wrap items-center gap-2 rounded-xl border border-border/70 px-3 py-2 shadow-sm">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Projects
+            </span>
+            {projectGroups.length === 0 ? (
+              <span className="text-xs text-muted-foreground">No agents yet</span>
+            ) : (
+              projectGroups.map((group) => (
+                <Badge key={group.title} variant="outline" size="sm">
+                  {group.title}
+                  <span className="text-muted-foreground">{group.count}</span>
+                </Badge>
+              ))
+            )}
+          </div>
+
+          <div className="surface-glass flex flex-wrap items-center gap-2 rounded-xl border border-border/70 px-3 py-2 shadow-sm">
+            <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <Link2Icon className="size-3.5" aria-hidden="true" />
+              Connect agents
+            </span>
+            <ConnectionSelector
+              agents={visibleSnapshot.agents}
+              onConnect={(source, target) => {
+                if (actions) void actions.connect(source, target);
+              }}
+              disabled={actions === null}
+            />
+          </div>
+        </Panel>
+
+        <Panel position="bottom-left" className="!m-4 !mb-3">
+          <div className="surface-glass flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-border/70 px-3 py-2 text-[11px] text-muted-foreground shadow-sm">
+            <span className="flex items-center gap-1.5">
+              <span className="size-1.5 rounded-full bg-foreground/45" /> delegates
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="size-1.5 rounded-full bg-violet-400" /> side chat
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="size-1.5 rounded-full bg-sky-400" /> coordinates
+            </span>
+          </div>
+        </Panel>
+      </ReactFlow>
+
+      {showDetails ? (
+        <div className="absolute bottom-4 right-4 z-20 max-w-xs rounded-lg border border-border/70 bg-background/95 p-3 text-xs text-muted-foreground shadow-lg backdrop-blur">
+          Select an agent to open its full chat controls.
+          <Button
+            size="icon-micro"
+            variant="ghost"
+            className="absolute right-1 top-1"
+            onClick={() => setShowDetails(false)}
+            aria-label="Close canvas help"
+          >
+            <XIcon aria-hidden="true" />
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export default function HarnessCanvas(props: HarnessCanvasProps) {
+  return (
+    <ReactFlowProvider>
+      <HarnessCanvasInner {...props} />
+    </ReactFlowProvider>
+  );
+}
