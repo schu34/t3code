@@ -1,42 +1,28 @@
+import { PROVIDER_SEND_TURN_MAX_INPUT_CHARS } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { applyHarnessPromptBehavior } from "./harnessGraphPrompt.ts";
+import { applyHarnessRolePrompt } from "./harnessGraphPrompt.ts";
 
-describe("applyHarnessPromptBehavior", () => {
-  it("adds role and requester instructions without changing the stored user message", () => {
-    const result = applyHarnessPromptBehavior("Review this implementation", {
-      role: { name: "Implementor", instructions: "Prefer small, tested changes." },
-      relationships: [
-        {
-          name: "Senior review",
-          direction: "requester",
-          instructions: "Ask for a code review and include the tradeoffs.",
-        },
-      ],
+describe("applyHarnessRolePrompt", () => {
+  it("prefixes role instructions without changing the stored user message", () => {
+    const result = applyHarnessRolePrompt("Review this implementation", {
+      name: "Implementor",
+      instructions: "Prefer small, tested changes.",
     });
 
-    expect(result).toContain("### Role: Implementor");
-    expect(result).toContain("Prefer small, tested changes.");
-    expect(result).toContain("### Relationship: Senior review (requester)");
-    expect(result).toContain("Ask for a code review and include the tradeoffs.");
+    expect(result).toContain("### Role: Implementor\nPrefer small, tested changes.");
     expect(result).toContain("### User request\n\nReview this implementation");
   });
 
-  it("selects responder instructions for the receiving side", () => {
-    expect(
-      applyHarnessPromptBehavior("Please review this", {
-        relationships: [
-          {
-            name: "Senior review",
-            direction: "responder",
-            instructions: "Review correctness and identify risky assumptions.",
-          },
-        ],
-      }),
-    ).toContain("### Relationship: Senior review (responder)");
+  it("leaves prompts unchanged without a role or with blank instructions", () => {
+    expect(applyHarnessRolePrompt("Hello", undefined)).toBe("Hello");
+    expect(applyHarnessRolePrompt("Hello", { name: "Empty", instructions: "  " })).toBe("Hello");
   });
 
-  it("leaves ordinary thread prompts unchanged when no Harness behavior applies", () => {
-    expect(applyHarnessPromptBehavior("Hello", { relationships: [] })).toBe("Hello");
+  it("never pushes the user message past the provider input limit", () => {
+    const message = "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS - 10);
+    const result = applyHarnessRolePrompt(message, { name: "Long", instructions: "y".repeat(500) });
+    expect(result.length).toBeLessThanOrEqual(PROVIDER_SEND_TURN_MAX_INPUT_CHARS);
+    expect(result.endsWith(message)).toBe(true);
   });
 });

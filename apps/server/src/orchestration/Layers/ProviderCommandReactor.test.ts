@@ -625,138 +625,34 @@ describe("ProviderCommandReactor", () => {
       generateBranchName,
       generateThreadTitle,
       runtimeSessions,
-      seedHarnessPromptBehavior: (channelMessage = false) =>
+      seedHarnessRole: () =>
         runtime!.runPromise(
           Effect.gen(function* () {
             const sql = yield* SqlClient.SqlClient;
-            const now = "2026-01-01T00:00:00.000Z";
             yield* sql`
-              INSERT INTO harness_role_definitions (
-                role_definition_id,
+              INSERT INTO harness_roles (
+                role_id,
                 name,
                 instructions,
-                created_at,
-                updated_at
+                created_at
               )
               VALUES (
                 'role-implementor',
                 'Implementor',
                 'Make small, tested changes.',
-                ${now},
-                ${now}
-              )
-            `;
-            yield* sql`
-              INSERT INTO harness_role_definitions (
-                role_definition_id,
-                name,
-                instructions,
-                created_at,
-                updated_at
-              )
-              VALUES (
-                'role-reviewer',
-                'Reviewer',
-                'Review carefully.',
-                ${now},
-                ${now}
-              )
-            `;
-            yield* sql`
-              INSERT INTO harness_relationship_definitions (
-                relationship_definition_id,
-                name,
-                request_instructions,
-                response_instructions,
-                created_at,
-                updated_at
-              )
-              VALUES (
-                'rel-review',
-                'Code review',
-                'Include the tradeoffs in the review request.',
-                'Identify correctness risks and missing tests.',
-                ${now},
-                ${now}
+                '2026-01-01T00:00:00.000Z'
               )
             `;
             yield* sql`
               INSERT INTO harness_agents (
-                agent_id,
                 thread_id,
-                kind,
-                role_definition_id,
-                created_at,
-                updated_at
+                role_id
               )
               VALUES (
-                'agent-implementor',
                 'thread-1',
-                'root',
-                'role-implementor',
-                ${now},
-                ${now}
+                'role-implementor'
               )
             `;
-            yield* sql`
-              INSERT INTO harness_agents (
-                agent_id,
-                thread_id,
-                kind,
-                role_definition_id,
-                created_at,
-                updated_at
-              )
-              VALUES (
-                'agent-reviewer',
-                'thread-reviewer',
-                'delegated',
-                'role-reviewer',
-                ${now},
-                ${now}
-              )
-            `;
-            yield* sql`
-              INSERT INTO harness_relationships (
-                relationship_id,
-                source_agent_id,
-                target_agent_id,
-                relationship_definition_id,
-                created_at
-              )
-              VALUES (
-                'relationship-review',
-                'agent-implementor',
-                'agent-reviewer',
-                'rel-review',
-                ${now}
-              )
-            `;
-            if (channelMessage) {
-              yield* sql`
-                INSERT INTO harness_channels
-                VALUES (
-                  'review-channel',
-                  'relationship-review',
-                  'Review',
-                  ${now}
-                )
-              `;
-              yield* sql`
-                INSERT INTO harness_coordination_messages
-                VALUES (
-                  'user-message-harness-behavior',
-                  'review-channel',
-                  'agent-implementor',
-                  'agent-reviewer',
-                  'user',
-                  'Review this implementation',
-                  1,
-                  'request-1',
-                  ${now}
-                )
-              `;
-            }
           }),
         ),
       stateDir,
@@ -1023,55 +919,44 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.runtimeMode).toBe("approval-required");
   });
 
-  it.each([false, true])(
-    "scopes Harness relationship instructions to channel turns (%s)",
-    async (channelMessage) => {
-      const harness = await createHarness();
-      await harness.seedHarnessPromptBehavior(channelMessage);
-      const sent = Effect.runSync(Deferred.make<void>());
-      harness.sendTurn.mockImplementation((_request: unknown) =>
-        Deferred.succeed(sent, undefined).pipe(
-          Effect.as({
-            threadId: ThreadId.make("thread-1"),
-            turnId: asTurnId("turn-1"),
-          }),
-        ),
-      );
-
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.make("cmd-turn-start-harness-behavior"),
+  it("applies the thread's Harness role to the provider request", async () => {
+    const harness = await createHarness();
+    await harness.seedHarnessRole();
+    const sent = Effect.runSync(Deferred.make<void>());
+    harness.sendTurn.mockImplementation((_request: unknown) =>
+      Deferred.succeed(sent, undefined).pipe(
+        Effect.as({
           threadId: ThreadId.make("thread-1"),
-          message: {
-            messageId: asMessageId("user-message-harness-behavior"),
-            role: "user",
-            text: "Review this implementation",
-            attachments: [],
-          },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
-          createdAt: "2026-01-01T00:00:00.000Z",
+          turnId: asTurnId("turn-1"),
         }),
-      );
+      ),
+    );
 
-      await Effect.runPromise(Deferred.await(sent));
-      await harness.drain();
-      const providerRequest = harness.sendTurn.mock.calls[0]?.[0] as
-        | { readonly input?: string }
-        | undefined;
-      const providerInput = providerRequest?.input;
-      expect(providerInput).toContain("### Role: Implementor");
-      expect(providerInput).toContain("Make small, tested changes.");
-      if (channelMessage) {
-        expect(providerInput).toContain("### Relationship: Code review (requester)");
-        expect(providerInput).toContain("Include the tradeoffs in the review request.");
-      } else {
-        expect(providerInput).not.toContain("### Relationship:");
-      }
-      expect(providerInput).toContain("### User request\n\nReview this implementation");
-    },
-  );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-harness-role"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-harness-role"),
+          role: "user",
+          text: "Review this implementation",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    await Effect.runPromise(Deferred.await(sent));
+    await harness.drain();
+    const providerRequest = harness.sendTurn.mock.calls[0]?.[0] as
+      | { readonly input?: string }
+      | undefined;
+    expect(providerRequest?.input).toContain("### Role: Implementor\nMake small, tested changes.");
+    expect(providerRequest?.input).toContain("### User request\n\nReview this implementation");
+  });
 
   effectIt.effect("projects inline context before sending the provider turn", () =>
     Effect.gen(function* () {
