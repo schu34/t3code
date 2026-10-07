@@ -27,7 +27,7 @@ function agent(id: string, patch: Partial<HarnessCanvasAgent> = {}): HarnessCanv
   return {
     id,
     kind: "root",
-    spawnedByAgentId: null,
+    parentAgentId: null,
     environmentId: "env" as never,
     threadId: id as never,
     projectId: "project" as never,
@@ -89,8 +89,8 @@ describe("harness canvas graph logic", () => {
     const laidOut = layoutHarnessCanvasAgents(
       [
         agent("parent"),
-        agent("child-a", { kind: "delegated", spawnedByAgentId: "parent" }),
-        agent("child-b", { kind: "delegated", spawnedByAgentId: "parent" }),
+        agent("child-a", { kind: "delegated", parentAgentId: "parent" }),
+        agent("child-b", { kind: "delegated", parentAgentId: "parent" }),
       ],
       {
         topInset: 280,
@@ -108,10 +108,10 @@ describe("harness canvas graph logic", () => {
       [
         { ...agent("parent"), position: { x: 420, y: 180 } },
         {
-          ...agent("saved-child", { kind: "delegated", spawnedByAgentId: "parent" }),
+          ...agent("saved-child", { kind: "delegated", parentAgentId: "parent" }),
           position: { x: 700, y: 370 },
         },
-        agent("new-child", { kind: "delegated", spawnedByAgentId: "parent" }),
+        agent("new-child", { kind: "delegated", parentAgentId: "parent" }),
       ],
       {
         columnWidth: 240,
@@ -128,11 +128,11 @@ describe("harness canvas graph logic", () => {
   it("derives creation lines without making sidechats or communication peers descendants", () => {
     const agents = [
       agent("parent"),
-      agent("child", { kind: "delegated", spawnedByAgentId: "parent" }),
-      agent("grandchild", { kind: "delegated", spawnedByAgentId: "child" }),
-      agent("sidechat", { kind: "sidechat", spawnedByAgentId: "parent" }),
+      agent("child", { kind: "delegated", parentAgentId: "parent" }),
+      agent("grandchild", { kind: "delegated", parentAgentId: "child" }),
+      agent("sidechat", { kind: "sidechat", parentAgentId: "parent" }),
       agent("peer"),
-      agent("orphan", { kind: "delegated", spawnedByAgentId: "missing" }),
+      agent("orphan", { kind: "delegated", parentAgentId: "missing" }),
     ];
     expect(
       deriveHarnessCreationEdges(agents).map(({ source, target, kind }) => ({
@@ -146,7 +146,6 @@ describe("harness canvas graph logic", () => {
       { source: "parent", target: "sidechat", kind: "sidechat" },
     ]);
     const snapshot: HarnessCanvasSnapshot = {
-      revision: 1,
       agents,
       edges: [
         {
@@ -154,10 +153,8 @@ describe("harness canvas graph logic", () => {
           source: "parent",
           target: "peer",
           kind: "coordination",
-          channelId: "review",
         },
       ],
-      channels: [],
     };
     expect(
       selectHarnessCanvasGraph(snapshot, { collapsedAgentIds: new Set(["parent"]) }).agents.map(
@@ -207,10 +204,9 @@ describe("harness canvas graph logic", () => {
 
   it("hides archived agents and delegation descendants without hiding coordination peers", () => {
     const snapshot: HarnessCanvasSnapshot = {
-      revision: 2,
       agents: [
         agent("parent"),
-        agent("child", { kind: "delegated", spawnedByAgentId: "parent" }),
+        agent("child", { kind: "delegated", parentAgentId: "parent" }),
         agent("peer"),
         { ...agent("archived"), archived: true },
       ],
@@ -220,10 +216,8 @@ describe("harness canvas graph logic", () => {
           source: "parent",
           target: "peer",
           kind: "coordination",
-          channelId: "channel",
         },
       ],
-      channels: [],
     };
 
     const selected = selectHarnessCanvasGraph(snapshot, {

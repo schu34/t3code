@@ -1,6 +1,5 @@
 import type {
   EnvironmentId,
-  HarnessAgentKind,
   OrchestrationProjectShell,
   OrchestrationThreadShell,
   ProjectId,
@@ -38,6 +37,9 @@ export type HarnessDeliveryStage =
 
 export type HarnessEdgeKind = "delegation" | "sidechat" | "coordination";
 
+/** Derived from creation origin: a parent makes a child, a parent turn makes a side chat. */
+export type HarnessCanvasAgentKind = "root" | "delegated" | "sidechat";
+
 export interface HarnessCanvasPosition {
   readonly x: number;
   readonly y: number;
@@ -52,9 +54,9 @@ export interface HarnessCanvasLayoutOptions {
 
 export interface HarnessCanvasAgent {
   readonly id: string;
-  readonly kind: HarnessAgentKind;
-  /** Creator's canvas ID, independent of communication relationships. */
-  readonly spawnedByAgentId: string | null;
+  readonly kind: HarnessCanvasAgentKind;
+  /** Creator's canvas ID, independent of communication edges. */
+  readonly parentAgentId: string | null;
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly draftId?: string;
@@ -76,31 +78,12 @@ export interface HarnessCanvasEdge {
   readonly source: string;
   readonly target: string;
   readonly kind: HarnessEdgeKind;
-  readonly channelId: string | null;
   readonly label?: string;
 }
 
-export interface HarnessChannelMessage {
-  readonly id: string;
-  readonly authorAgentId: string;
-  readonly text: string;
-  readonly createdAt: string;
-}
-
-export interface HarnessCanvasChannel {
-  readonly id: string;
-  readonly sourceAgentId: string;
-  readonly targetAgentId: string;
-  readonly topic: string;
-  readonly messageCount: number;
-  readonly transcript: ReadonlyArray<HarnessChannelMessage>;
-}
-
 export interface HarnessCanvasSnapshot {
-  readonly revision: number;
   readonly agents: ReadonlyArray<HarnessCanvasAgent>;
   readonly edges: ReadonlyArray<HarnessCanvasEdge>;
-  readonly channels: ReadonlyArray<HarnessCanvasChannel>;
 }
 
 export interface HarnessCanvasPositionUpdate {
@@ -114,13 +97,7 @@ export interface HarnessCanvasActions {
   readonly createAgent: () => Promise<void>;
   readonly createChild: (agentId: string) => Promise<void>;
   readonly forkSidechat: (agentId: string, completedTurnId: string) => Promise<void>;
-  readonly connect: (
-    sourceAgentId: string,
-    targetAgentId: string,
-    relationshipDefinitionId: string,
-  ) => Promise<void>;
-  readonly loadChannel: (channelId: string) => Promise<HarnessCanvasChannel | null>;
-  readonly sendCoordination: (channelId: string, body: string) => Promise<void>;
+  readonly connect: (sourceAgentId: string, targetAgentId: string) => Promise<void>;
 }
 
 export interface HarnessCanvasThreadLike {
@@ -240,7 +217,7 @@ export function deriveHarnessCreationEdges(
 ): ReadonlyArray<HarnessCanvasEdge> {
   const agentIds = new Set(agents.map((agent) => agent.id));
   return agents.flatMap((agent) => {
-    const source = agent.spawnedByAgentId;
+    const source = agent.parentAgentId;
     if (agent.kind === "root" || source === null || source === agent.id || !agentIds.has(source)) {
       return [];
     }
@@ -250,7 +227,6 @@ export function deriveHarnessCreationEdges(
         source,
         target: agent.id,
         kind: agent.kind === "delegated" ? ("delegation" as const) : ("sidechat" as const),
-        channelId: null,
       },
     ];
   });
@@ -419,10 +395,7 @@ export function selectHarnessCanvasGraph(
   const edges = snapshot.edges.filter(
     (edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target),
   );
-  const channels = snapshot.channels.filter(
-    (channel) => visibleIds.has(channel.sourceAgentId) && visibleIds.has(channel.targetAgentId),
-  );
-  return { ...snapshot, agents, edges, channels };
+  return { agents, edges };
 }
 
 export function buildHarnessCanvasSnapshotFromThreads(
@@ -441,7 +414,7 @@ export function buildHarnessCanvasSnapshotFromThreads(
     return {
       id,
       kind: "root" as const,
-      spawnedByAgentId: null,
+      parentAgentId: null,
       environmentId: thread.environmentId,
       threadId: thread.id,
       projectId: thread.projectId,
@@ -458,9 +431,7 @@ export function buildHarnessCanvasSnapshotFromThreads(
     } satisfies HarnessCanvasAgent;
   });
   return {
-    revision: 0,
     agents: layoutHarnessCanvasAgents(agents, layoutOptions),
     edges: [],
-    channels: [],
   };
 }
