@@ -271,6 +271,14 @@ import {
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
+import {
+  HarnessCreateRoleInput,
+  HarnessGraphError,
+  HarnessGraphReadInput,
+  HarnessGraphSnapshot,
+  HarnessSetAgentInput,
+  HarnessUpsertEdgeInput,
+} from "./harnessGraph.ts";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -440,6 +448,13 @@ export const WS_METHODS = {
   subscribeAuthAccess: "subscribeAuthAccess",
   subscribeBackgroundPolicy: "subscribeBackgroundPolicy",
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
+
+  // Harness graph methods
+  harnessGraphRead: "harnessGraph.read",
+  harnessGraphSubscribe: "harnessGraph.subscribe",
+  harnessGraphCreateRole: "harnessGraph.createRole",
+  harnessGraphSetAgent: "harnessGraph.setAgent",
+  harnessGraphUpsertEdge: "harnessGraph.upsertEdge",
 } as const;
 
 const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -1381,6 +1396,37 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
   stream: true,
 });
 
+const WsHarnessGraphReadRpc = Rpc.make(WS_METHODS.harnessGraphRead, {
+  payload: HarnessGraphReadInput,
+  success: HarnessGraphSnapshot,
+  error: HarnessGraphError,
+});
+
+const WsHarnessGraphSubscribeRpc = Rpc.make(WS_METHODS.harnessGraphSubscribe, {
+  payload: HarnessGraphReadInput,
+  success: HarnessGraphSnapshot,
+  error: HarnessGraphError,
+  stream: true,
+});
+
+const WsHarnessGraphCreateRoleRpc = Rpc.make(WS_METHODS.harnessGraphCreateRole, {
+  payload: HarnessCreateRoleInput,
+  success: Schema.Void,
+  error: HarnessGraphError,
+});
+
+const WsHarnessGraphSetAgentRpc = Rpc.make(WS_METHODS.harnessGraphSetAgent, {
+  payload: HarnessSetAgentInput,
+  success: Schema.Void,
+  error: HarnessGraphError,
+});
+
+const WsHarnessGraphUpsertEdgeRpc = Rpc.make(WS_METHODS.harnessGraphUpsertEdge, {
+  payload: HarnessUpsertEdgeInput,
+  success: Schema.Void,
+  error: HarnessGraphError,
+});
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
@@ -1517,6 +1563,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeAuthAccessRpc,
   WsSubscribeBackgroundPolicyRpc,
   WsSubscribeResourceTelemetryRpc,
+  WsHarnessGraphReadRpc,
+  WsHarnessGraphSubscribeRpc,
+  WsHarnessGraphCreateRoleRpc,
+  WsHarnessGraphSetAgentRpc,
+  WsHarnessGraphUpsertEdgeRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetWorkflowScriptRpc,
   WsOrchestrationGetTurnDiffRpc,
