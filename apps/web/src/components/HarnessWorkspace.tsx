@@ -1,18 +1,5 @@
-import {
-  HarnessRoleDefinitionId,
-  HarnessRelationshipDefinitionId,
-  HarnessRelationshipId,
-  HarnessAgentId,
-  DEFAULT_MODEL,
-  ProviderInstanceId,
-} from "@t3tools/contracts";
-import type {
-  EnvironmentId,
-  HarnessChannel,
-  HarnessChannelId,
-  HarnessGraphSnapshot,
-  TurnId,
-} from "@t3tools/contracts";
+import { DEFAULT_MODEL, ProviderInstanceId } from "@t3tools/contracts";
+import type { EnvironmentId, HarnessGraphSnapshot, ThreadId, TurnId } from "@t3tools/contracts";
 import { useCallback, useMemo } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useComposerDraftStore, markPromotedDraftThreadByRef } from "../composerDraftStore";
@@ -24,81 +11,28 @@ import HarnessCanvas from "./HarnessCanvas";
 import {
   buildHarnessCanvasSnapshotFromThreads,
   deriveHarnessCreationEdges,
+  harnessAgentId,
   layoutHarnessCanvasAgents,
   type HarnessCanvasActions,
   type HarnessCanvasAgent,
-  type HarnessCanvasChannel,
   type HarnessCanvasSnapshot,
 } from "../harnessCanvas.logic";
 import {
-  harnessGraphGetChannel,
-  harnessGraphOpenChannel,
   harnessGraphRead,
-  harnessGraphRegisterAgent,
-  harnessGraphSendCoordination,
+  harnessGraphSetAgent,
   harnessGraphSubscribe,
-  harnessGraphUpsertRelationship,
+  harnessGraphUpsertEdge,
 } from "../state/harnessGraph";
 import { useEnvironmentQuery } from "../state/query";
 import { useProjects, useThreadShells } from "../state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
-import { randomUUID } from "../lib/utils";
-
-function graphAgentFor(
-  graph: HarnessGraphSnapshot | null,
-  localAgent: HarnessCanvasAgent,
-): HarnessGraphSnapshot["agents"][number] | undefined {
-  return graph?.agents.find(
-    (agent) =>
-      agent.backing.kind === "thread" &&
-      agent.backing.threadId === localAgent.threadId &&
-      agent.projectId === localAgent.projectId,
-  );
-}
-
-function defaultRoleId(): HarnessRoleDefinitionId {
-  return HarnessRoleDefinitionId.make("builtin:general");
-}
-
-function hydrateCanvasChannel(
-  channel: HarnessChannel,
-  localIdByServerId: ReadonlyMap<string, string>,
-  graph: HarnessGraphSnapshot | null,
-): HarnessCanvasChannel | null {
-  const relationship = graph?.relationships.find(
-    (r) => r.relationshipId === channel.relationshipId,
-  );
-  if (!relationship) return null;
-  const sourceAgentId = localIdByServerId.get(relationship.sourceAgentId);
-  const targetAgentId = localIdByServerId.get(relationship.targetAgentId);
-  if (sourceAgentId === undefined || targetAgentId === undefined) return null;
-  return {
-    id: channel.channelId,
-    sourceAgentId,
-    targetAgentId,
-    topic: channel.topic,
-    messageCount: channel.messages.length,
-    transcript: channel.messages.map((message) => ({
-      id: message.messageId,
-      authorAgentId: localIdByServerId.get(message.senderAgentId) ?? message.senderAgentId,
-      text: message.body,
-      createdAt: message.createdAt,
-    })),
-  };
-}
 
 function buildSnapshot(
   environmentId: EnvironmentId,
   threads: ReturnType<typeof useThreadShells>,
   projects: ReturnType<typeof useProjects>,
-  drafts: ReadonlyArray<{
-    readonly draftId: string;
-    readonly environmentId: EnvironmentId;
-    readonly threadId: string;
-    readonly projectId: string;
-  }>,
   graph: HarnessGraphSnapshot | null,
 ): HarnessCanvasSnapshot {
   const base = buildHarnessCanvasSnapshotFromThreads(
@@ -109,78 +43,38 @@ function buildSnapshot(
   );
   if (graph === null) return base;
 
-  const allAgents = base.agents;
-
-  const serverIdByLocalId = new Map(
-    allAgents.flatMap((agent) => {
-      const serverAgent = graphAgentFor(graph, agent);
-      return serverAgent === undefined ? [] : [[agent.id, serverAgent.agentId] as const];
-    }),
-  );
-  const localIdByServerId = new Map(
-    [...serverIdByLocalId].map(([localId, serverId]) => [serverId, localId] as const),
-  );
-  const agentsWithProvenance = allAgents.map((agent) => {
-    const metadata = graphAgentFor(graph, agent);
+  const byThreadId = new Map(graph.agents.map((agent) => [agent.threadId, agent]));
+  const agentsWithProvenance = base.agents.map((agent) => {
+    const metadata = byThreadId.get(agent.threadId);
+    const parentThreadId = metadata?.parentThreadId;
     return {
       ...agent,
-      kind: metadata?.kind ?? agent.kind,
-      spawnedByAgentId:
-        metadata?.spawnedByAgentId === undefined
-          ? null
-          : (localIdByServerId.get(metadata.spawnedByAgentId) ?? null),
+      kind:
+        parentThreadId === undefined
+          ? ("root" as const)
+          : metadata?.forkedFromTurnId === undefined
+            ? ("delegated" as const)
+            : ("sidechat" as const),
+      parentAgentId:
+        parentThreadId === undefined ? null : harnessAgentId(environmentId, parentThreadId),
       // Base positions are fallback layout, not user-dragged session positions.
       position: null,
     };
   });
   const edges = [
     ...deriveHarnessCreationEdges(agentsWithProvenance),
-    ...graph.relationships.flatMap((relationship) => {
-      const source = localIdByServerId.get(relationship.sourceAgentId);
-      const target = localIdByServerId.get(relationship.targetAgentId);
-      return source === undefined || target === undefined
-        ? []
-        : [
-            {
-              id: relationship.relationshipId,
-              source,
-              target,
-              kind: "coordination",
-              label:
-                graph.relationshipDefinitions.find(
-                  (d) => d.relationshipDefinitionId === relationship.relationshipDefinitionId,
-                )?.name ?? "Communication",
-              channelId:
-                graph.channels.find((c) => c.relationshipId === relationship.relationshipId)
-                  ?.channelId ?? null,
-            } as const,
-          ];
-    }),
+    ...graph.edges.map((edge) => ({
+      id: edge.edgeId,
+      source: harnessAgentId(environmentId, edge.sourceThreadId),
+      target: harnessAgentId(environmentId, edge.targetThreadId),
+      kind: "coordination" as const,
+      ...(edge.label === undefined ? {} : { label: edge.label }),
+    })),
   ];
-  const agents = layoutHarnessCanvasAgents(agentsWithProvenance, { topInset: 280 });
-  const channels: ReadonlyArray<HarnessCanvasChannel> = graph.channels.flatMap((channel) => {
-    const relationship = graph.relationships.find(
-      (r) => r.relationshipId === channel.relationshipId,
-    );
-    const source = allAgents.find(
-      (agent) => serverIdByLocalId.get(agent.id) === relationship?.sourceAgentId,
-    );
-    const target = allAgents.find(
-      (agent) => serverIdByLocalId.get(agent.id) === relationship?.targetAgentId,
-    );
-    if (source === undefined || target === undefined) return [];
-    return [
-      {
-        id: channel.channelId,
-        sourceAgentId: source.id,
-        targetAgentId: target.id,
-        topic: channel.topic,
-        messageCount: channel.messageCount,
-        transcript: [],
-      },
-    ];
-  });
-  return { revision: graph.revision, agents, edges, channels };
+  return {
+    agents: layoutHarnessCanvasAgents(agentsWithProvenance, { topInset: 280 }),
+    edges,
+  };
 }
 
 function commandError(result: { readonly _tag: string }): Error | null {
@@ -193,17 +87,6 @@ export default function HarnessWorkspace() {
   const environmentId = primaryEnvironmentId ?? environments[0]?.environmentId ?? null;
   const projects = useProjects();
   const threads = useThreadShells();
-  const draftThreadsByThreadKey = useComposerDraftStore((state) => state.draftThreadsByThreadKey);
-  const drafts = useMemo(
-    () =>
-      Object.entries(draftThreadsByThreadKey).map(([draftId, draft]) => ({
-        draftId,
-        environmentId: draft.environmentId,
-        threadId: draft.threadId,
-        projectId: draft.projectId,
-      })),
-    [draftThreadsByThreadKey],
-  );
   const navigate = useNavigate();
   const newThread = useNewThreadHandler();
   const latestProject = projects.find((project) => project.environmentId === environmentId);
@@ -217,27 +100,19 @@ export default function HarnessWorkspace() {
   const snapshot = useMemo(
     () =>
       environmentId === null
-        ? { revision: 0, agents: [], edges: [], channels: [] }
-        : buildSnapshot(environmentId, threads, projects, drafts, graph),
-    [drafts, environmentId, graph, projects, threads],
+        ? { agents: [], edges: [] }
+        : buildSnapshot(environmentId, threads, projects, graph),
+    [environmentId, graph, projects, threads],
   );
 
-  const upsertRelationship = useAtomCommand(harnessGraphUpsertRelationship, {
-    reportFailure: false,
-  });
-  const openChannel = useAtomCommand(harnessGraphOpenChannel, { reportFailure: false });
-  const getChannel = useAtomCommand(harnessGraphGetChannel, { reportFailure: false });
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
-  const registerAgent = useAtomCommand(harnessGraphRegisterAgent, { reportFailure: false });
-  const sendCoordination = useAtomCommand(harnessGraphSendCoordination, { reportFailure: false });
+  const setAgent = useAtomCommand(harnessGraphSetAgent, { reportFailure: false });
+  const upsertEdge = useAtomCommand(harnessGraphUpsertEdge, { reportFailure: false });
 
-  const serverAgentId = useCallback(
-    (localId: string): HarnessAgentId | null => {
-      const local = snapshot.agents.find((agent) => agent.id === localId);
-      if (local === undefined || graph === null) return null;
-      return graphAgentFor(graph, local)?.agentId ?? null;
-    },
-    [graph, snapshot.agents],
+  const threadIdFor = useCallback(
+    (localId: string): ThreadId | null =>
+      snapshot.agents.find((agent) => agent.id === localId)?.threadId ?? null,
+    [snapshot.agents],
   );
   const run = useCallback(
     async <A,>(
@@ -303,133 +178,46 @@ export default function HarnessWorkspace() {
 
   const actions = useMemo<HarnessCanvasActions | null>(() => {
     if (environmentId === null) return null;
+    const createUnder = async (
+      agentId: string,
+      title: string,
+      forkedFromTurnId?: TurnId,
+    ): Promise<void> => {
+      const parent = snapshot.agents.find((agent) => agent.id === agentId);
+      if (parent === undefined) return;
+      const result = await createGraphThread(parent.projectId, title);
+      if (result === null) return;
+      await run(setAgent, {
+        threadId: result.threadId,
+        parentThreadId: parent.threadId,
+        ...(forkedFromTurnId === undefined ? {} : { forkedFromTurnId }),
+      });
+    };
     return {
       createAgent: async () => {
         if (latestProject === undefined) return;
-        const result = await createGraphThread(latestProject.id, "New agent");
-        if (result === null) return;
-        await run(registerAgent, {
-          agentId: HarnessAgentId.make(result.threadId),
-          threadId: result.threadId,
-          kind: "root" as const,
-          roleDefinitionId: defaultRoleId(),
-        });
+        await createGraphThread(latestProject.id, "New agent");
       },
-      createChild: async (agentId) => {
-        const parent = snapshot.agents.find((agent) => agent.id === agentId);
-        if (parent === undefined) return;
-        const parentServerId = serverAgentId(agentId);
-        if (parentServerId === null) return;
-        const relationshipDefinitionId = HarnessRelationshipDefinitionId.make("builtin:delegation");
-        const result = await createGraphThread(parent.projectId, "New agent");
-        if (result === null) return;
-        const childServerId = HarnessAgentId.make(result.threadId);
-        await run(registerAgent, {
-          agentId: childServerId,
-          threadId: result.threadId,
-          kind: "delegated" as const,
-          roleDefinitionId: defaultRoleId(),
-          spawnedByAgentId: parentServerId,
-        });
-        await run(upsertRelationship, {
-          sourceAgentId: parentServerId,
-          targetAgentId: childServerId,
-          relationshipDefinitionId,
-        });
-      },
-      forkSidechat: async (agentId, completedTurnId) => {
-        const parent = snapshot.agents.find((agent) => agent.id === agentId);
-        const parentServerId = serverAgentId(agentId);
-        if (parent === undefined || parentServerId === null) return;
-        const result = await createGraphThread(parent.projectId, "Side chat");
-        if (result === null) return;
-        const sidechatServerId = HarnessAgentId.make(result.threadId);
-        await run(registerAgent, {
-          agentId: sidechatServerId,
-          threadId: result.threadId,
-          kind: "sidechat" as const,
-          roleDefinitionId: defaultRoleId(),
-          spawnedByAgentId: parentServerId,
-        });
-        await run(upsertRelationship, {
-          sourceAgentId: parentServerId,
-          targetAgentId: sidechatServerId,
-          relationshipDefinitionId: HarnessRelationshipDefinitionId.make("builtin:sidechat"),
-          forkedFromTurnId: completedTurnId as TurnId,
-        });
-      },
-      connect: async (sourceAgentId, targetAgentId, definitionId) => {
-        const source = serverAgentId(sourceAgentId);
-        const target = serverAgentId(targetAgentId);
-        if (source === null || target === null || source === target) return;
-        const relationshipDefinitionId = HarnessRelationshipDefinitionId.make(definitionId);
-        const relationshipId = HarnessRelationshipId.make(randomUUID());
-        await run(upsertRelationship, {
-          sourceAgentId: source,
-          targetAgentId: target,
-          relationshipDefinitionId,
-          topic:
-            graph?.relationshipDefinitions.find(
-              (d) => d.relationshipDefinitionId === relationshipDefinitionId,
-            )?.name ?? "Shared work",
-          relationshipId,
-        });
-        await run(openChannel, {
-          relationshipId,
-          topic:
-            graph?.relationshipDefinitions.find(
-              (d) => d.relationshipDefinitionId === relationshipDefinitionId,
-            )?.name ?? "Shared work",
-        });
-      },
-      loadChannel: async (channelId) => {
-        const result = await getChannel({
-          environmentId,
-          input: { channelId: channelId as HarnessChannelId },
-        });
-        if (result._tag === "Failure") return null;
-        const localIdByServerId = new Map(
-          graph?.agents.flatMap((serverAgent) => {
-            const local = snapshot.agents.find(
-              (agent) =>
-                serverAgent.backing.kind === "thread" &&
-                agent.threadId === serverAgent.backing.threadId &&
-                agent.projectId === serverAgent.projectId,
-            );
-            return local === undefined ? [] : [[serverAgent.agentId, local.id] as const];
-          }) ?? [],
-        );
-        return hydrateCanvasChannel(result.value, localIdByServerId, graph);
-      },
-      sendCoordination: async (channelId, body) => {
-        const channel = snapshot.channels.find((entry) => entry.id === channelId);
-        if (channel === undefined) return;
-        const senderAgentId = serverAgentId(channel.sourceAgentId);
-        const graphChannel = graph?.channels.find((entry) => entry.channelId === channelId);
-        if (senderAgentId === null || graphChannel === undefined) return;
-        await run(sendCoordination, {
-          channelId: graphChannel.channelId,
-          senderAgentId,
-          authorKind: "user" as const,
-          body,
-          deduplicationKey: `user:${randomUUID()}`,
-        });
+      createChild: (agentId) => createUnder(agentId, "New agent"),
+      forkSidechat: (agentId, completedTurnId) =>
+        createUnder(agentId, "Side chat", completedTurnId as TurnId),
+      connect: async (sourceAgentId, targetAgentId) => {
+        const sourceThreadId = threadIdFor(sourceAgentId);
+        const targetThreadId = threadIdFor(targetAgentId);
+        if (sourceThreadId === null || targetThreadId === null) return;
+        if (sourceThreadId === targetThreadId) return;
+        await run(upsertEdge, { sourceThreadId, targetThreadId });
       },
     };
   }, [
     environmentId,
     latestProject,
-    getChannel,
     createGraphThread,
-    openChannel,
-    registerAgent,
     run,
-    sendCoordination,
-    serverAgentId,
-    graph,
+    setAgent,
     snapshot.agents,
-    snapshot.channels,
-    upsertRelationship,
+    threadIdFor,
+    upsertEdge,
   ]);
 
   const onSelectAgent = useCallback(
@@ -453,12 +241,6 @@ export default function HarnessWorkspace() {
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
       <HarnessCanvas
         snapshot={snapshot}
-        relationshipDefinitions={
-          graph?.relationshipDefinitions.map((definition) => ({
-            id: definition.relationshipDefinitionId,
-            name: definition.name,
-          })) ?? []
-        }
         actions={actions}
         onSelectAgent={onSelectAgent}
         className="min-h-0"

@@ -16,9 +16,7 @@ import {
   EnvironmentId,
   EventId,
   GitCommandError,
-  HarnessAgentId,
-  HarnessRoleDefinitionId,
-  HarnessRelationshipDefinitionId,
+  HarnessRoleId,
   KeybindingRule,
   MessageId,
   ExternalLauncherCommandNotFoundError,
@@ -5443,177 +5441,35 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("reuses harness definitions across projects through websocket rpc", () =>
+  it.effect("routes harness graph rpcs and surfaces validation errors", () =>
     Effect.gen(function* () {
-      let shells = ["project-a", "project-b"].flatMap((project) =>
-        ["requester", "responder"].map((side) =>
-          makeDefaultOrchestrationThreadShell({
-            id: ThreadId.make(`${project}-${side}`),
-            projectId: ProjectId.make(project),
-            title: side,
-          }),
-        ),
-      );
-      yield* buildAppUnderTest({
-        layers: {
-          projectionSnapshotQuery: {
-            getShellSnapshot: () =>
-              Effect.sync(() => ({
-                snapshotSequence: 0,
-                updatedAt: "2026-01-01T00:00:00.000Z",
-                projects: [],
-                threads: shells,
-              })),
-          },
-        },
-      });
+      yield* buildAppUnderTest();
       const wsUrl = yield* getWsServerUrl("/ws");
       yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
           Effect.gen(function* () {
-            const roleDefinitionId = HarnessRoleDefinitionId.make("shared-implementor");
-            const emptyGraph = yield* client[WS_METHODS.harnessGraphRead]({
-              projectId: ProjectId.make("empty-project"),
-            });
-            assert.equal(emptyGraph.agents.length, 0);
-            assert.isTrue(
-              emptyGraph.roleDefinitions.some(
-                (definition) => definition.roleDefinitionId === "builtin:general",
-              ),
-            );
-            const role = yield* client[WS_METHODS.harnessGraphCreateRoleDefinition]({
-              roleDefinitionId,
-              name: "Shared implementor",
+            const roleId = HarnessRoleId.make("implementor");
+            yield* client[WS_METHODS.harnessGraphCreateRole]({
+              roleId,
+              name: "Implementor",
               instructions: "Implement changes.",
             });
-            assert.isFalse("projectId" in role);
-            const relationshipDefinitionId = HarnessRelationshipDefinitionId.make("shared-review");
-            yield* client[WS_METHODS.harnessGraphCreateRelationshipDefinition]({
-              relationshipDefinitionId,
-              name: "Shared review",
-              requestInstructions: "Request review.",
-              responseInstructions: "Review changes.",
-            });
-            for (const project of ["project-a", "project-b"]) {
-              const projectId = ProjectId.make(project);
-              for (const side of ["requester", "responder"]) {
-                yield* client[WS_METHODS.harnessGraphRegisterAgent]({
-                  agentId: HarnessAgentId.make(`${project}-${side}`),
-                  threadId: ThreadId.make(`${project}-${side}`),
-                  kind: "root",
-                  roleDefinitionId,
-                });
-              }
-              yield* client[WS_METHODS.harnessGraphUpsertRelationship]({
-                sourceAgentId: HarnessAgentId.make(`${project}-requester`),
-                targetAgentId: HarnessAgentId.make(`${project}-responder`),
-                relationshipDefinitionId,
-              });
-              const graph = yield* client[WS_METHODS.harnessGraphRead]({ projectId });
-              assert.equal(graph.agents.length, 2);
-              assert.isTrue(graph.agents.every((agent) => agent.projectId === projectId));
-              assert.isTrue(
-                graph.roleDefinitions.some(
-                  (definition) => definition.roleDefinitionId === roleDefinitionId,
-                ),
-              );
-              assert.equal(graph.relationships.length, 1);
-              assert.isTrue(
-                graph.relationshipDefinitions.some(
-                  (definition) => definition.relationshipDefinitionId === relationshipDefinitionId,
-                ),
-              );
-              assert.equal(
-                graph.roleDefinitions.filter(
-                  (definition) => definition.roleDefinitionId === "builtin:general",
-                ).length,
-                1,
-              );
-            }
-            const missingRole = yield* client[WS_METHODS.harnessGraphRegisterAgent]({
-              agentId: HarnessAgentId.make("missing"),
-              threadId: ThreadId.make("missing"),
-              kind: "root",
-              roleDefinitionId,
-            }).pipe(Effect.flip);
-            assert.equal(missingRole._tag, "HarnessGraphValidationError");
-            const graph = yield* client[WS_METHODS.harnessGraphRead]({
-              projectId: ProjectId.make("project-a"),
-            });
-            const relationship = graph.relationships[0]!;
-            yield* client[WS_METHODS.harnessGraphUpsertRelationship]({
-              sourceAgentId: relationship.sourceAgentId,
-              targetAgentId: relationship.targetAgentId,
-              relationshipDefinitionId,
-            });
-            const opened = yield* client[WS_METHODS.harnessGraphOpenChannel]({
-              relationshipId: relationship.relationshipId,
-              topic: "Review",
-            });
-            const channelId = opened.channels[0]!.channelId;
-            yield* Effect.all(
-              Array.from({ length: 8 }, (_, index) =>
-                client[WS_METHODS.harnessGraphSendCoordination]({
-                  channelId,
-                  senderAgentId:
-                    index % 2 === 0 ? relationship.sourceAgentId : relationship.targetAgentId,
-                  authorKind: "user",
-                  body: `Message ${index}`,
-                  deduplicationKey: `message-${index}`,
-                }),
-              ),
-              { concurrency: "unbounded" },
-            );
-            yield* client[WS_METHODS.harnessGraphSendCoordination]({
-              channelId,
-              senderAgentId: relationship.sourceAgentId,
-              authorKind: "user",
-              body: "Duplicate",
-              deduplicationKey: "message-0",
-            });
-            const channel = yield* client[WS_METHODS.harnessGraphGetChannel]({ channelId });
+            const graph = yield* client[WS_METHODS.harnessGraphRead]({});
             assert.deepEqual(
-              channel.messages.map((m) => m.sequence),
-              [1, 2, 3, 4, 5, 6, 7, 8],
+              graph.roles.map((role) => role.roleId),
+              [roleId],
             );
-            assert.equal(channel.messageCount, 8);
-            yield* client[WS_METHODS.harnessGraphRegisterAgent]({
-              agentId: relationship.targetAgentId,
-              threadId: ThreadId.make(relationship.targetAgentId),
-              kind: "delegated",
-              roleDefinitionId,
-              spawnedByAgentId: relationship.sourceAgentId,
-            });
-            const cycle = yield* client[WS_METHODS.harnessGraphRegisterAgent]({
-              agentId: relationship.sourceAgentId,
-              threadId: ThreadId.make(relationship.sourceAgentId),
-              kind: "delegated",
-              roleDefinitionId,
-              spawnedByAgentId: relationship.targetAgentId,
+            const duplicate = yield* client[WS_METHODS.harnessGraphCreateRole]({
+              roleId: HarnessRoleId.make("other"),
+              name: "Implementor",
+              instructions: "",
             }).pipe(Effect.flip);
-            assert.equal(cycle._tag, "HarnessGraphValidationError");
-            const origin = yield* client[WS_METHODS.harnessGraphRegisterAgent]({
-              agentId: relationship.targetAgentId,
-              threadId: ThreadId.make(relationship.targetAgentId),
-              kind: "root",
-              roleDefinitionId,
+            assert.equal(duplicate._tag, "HarnessGraphValidationError");
+            const missingThread = yield* client[WS_METHODS.harnessGraphSetAgent]({
+              threadId: ThreadId.make("missing"),
+              roleId,
             }).pipe(Effect.flip);
-            assert.equal(origin._tag, "HarnessGraphValidationError");
-            shells = shells.map((t) =>
-              t.id === ThreadId.make(relationship.sourceAgentId)
-                ? { ...t, title: "Renamed", settledOverride: "settled" as const }
-                : t,
-            );
-            const renamed = yield* client[WS_METHODS.harnessGraphRead]({});
-            const agent = renamed.agents.find((a) => a.agentId === relationship.sourceAgentId)!;
-            assert.equal(agent.displayName, "Renamed");
-            assert.equal(agent.status, "completed");
-            assert.isFalse("threadId" in agent);
-            shells = shells.filter((t) => t.id !== ThreadId.make(relationship.sourceAgentId));
-            const deleted = yield* client[WS_METHODS.harnessGraphRead]({});
-            assert.isFalse(deleted.agents.some((a) => a.agentId === relationship.sourceAgentId));
-            assert.equal(deleted.relationships.length, 1);
-            assert.equal(deleted.channels.length, 0);
+            assert.equal(missingThread._tag, "HarnessGraphValidationError");
           }),
         ),
       );
