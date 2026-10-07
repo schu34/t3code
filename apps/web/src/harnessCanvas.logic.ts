@@ -1,5 +1,6 @@
 import type {
   EnvironmentId,
+  HarnessAgentKind,
   OrchestrationProjectShell,
   OrchestrationThreadShell,
   ProjectId,
@@ -47,12 +48,13 @@ export interface HarnessCanvasLayoutOptions {
   readonly rowHeight?: number;
   readonly leftInset?: number;
   readonly topInset?: number;
-  /** Delegation edges give fresh children a stable row below their parent. */
-  readonly edges?: ReadonlyArray<Pick<HarnessCanvasEdge, "source" | "target" | "kind">>;
 }
 
 export interface HarnessCanvasAgent {
   readonly id: string;
+  readonly kind: HarnessAgentKind;
+  /** Creator's canvas ID, independent of communication relationships. */
+  readonly spawnedByAgentId: string | null;
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly draftId?: string;
@@ -232,6 +234,28 @@ export function deriveHarnessActivity(thread: HarnessCanvasThreadLike): string {
   return "No active turn";
 }
 
+/** Creation lines are derived from provenance, never from communication links. */
+export function deriveHarnessCreationEdges(
+  agents: ReadonlyArray<HarnessCanvasAgent>,
+): ReadonlyArray<HarnessCanvasEdge> {
+  const agentIds = new Set(agents.map((agent) => agent.id));
+  return agents.flatMap((agent) => {
+    const source = agent.spawnedByAgentId;
+    if (agent.kind === "root" || source === null || source === agent.id || !agentIds.has(source)) {
+      return [];
+    }
+    return [
+      {
+        id: `creation:${agent.id}`,
+        source,
+        target: agent.id,
+        kind: agent.kind === "delegated" ? ("delegation" as const) : ("sidechat" as const),
+        channelId: null,
+      },
+    ];
+  });
+}
+
 export function layoutHarnessCanvasAgents(
   agents: ReadonlyArray<HarnessCanvasAgent>,
   options: HarnessCanvasLayoutOptions = {},
@@ -240,9 +264,8 @@ export function layoutHarnessCanvasAgents(
   const rowHeight = options.rowHeight ?? 190;
   const leftInset = options.leftInset ?? 80;
   const topInset = options.topInset ?? 80;
-  const agentIds = new Set(agents.map((agent) => agent.id));
-  const delegationEdges = (options.edges ?? []).filter(
-    (edge) => edge.kind === "delegation" && agentIds.has(edge.source) && agentIds.has(edge.target),
+  const delegationEdges = deriveHarnessCreationEdges(agents).filter(
+    (edge) => edge.kind === "delegation",
   );
   const delegatedIds = new Set(delegationEdges.map((edge) => edge.target));
   const gridAgents =
@@ -354,9 +377,10 @@ export function selectHarnessCanvasNodeSelection<
 
 function descendantsOf(
   rootId: string,
-  edges: ReadonlyArray<HarnessCanvasEdge>,
+  agents: ReadonlyArray<HarnessCanvasAgent>,
 ): ReadonlySet<string> {
   const descendants = new Set<string>();
+  const edges = deriveHarnessCreationEdges(agents);
   const pending = [rootId];
   while (pending.length > 0) {
     const current = pending.pop();
@@ -386,7 +410,7 @@ export function selectHarnessCanvasGraph(
     }
   }
   for (const id of options.collapsedAgentIds ?? []) {
-    for (const descendant of descendantsOf(id, snapshot.edges)) {
+    for (const descendant of descendantsOf(id, snapshot.agents)) {
       hiddenIds.add(descendant);
     }
   }
@@ -416,6 +440,8 @@ export function buildHarnessCanvasSnapshotFromThreads(
     const latestTurn = thread.latestTurn;
     return {
       id,
+      kind: "root" as const,
+      spawnedByAgentId: null,
       environmentId: thread.environmentId,
       threadId: thread.id,
       projectId: thread.projectId,

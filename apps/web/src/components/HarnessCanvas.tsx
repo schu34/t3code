@@ -317,7 +317,6 @@ function makeFlowEdges(edges: ReadonlyArray<HarnessCanvasEdge>): Edge[] {
     labelStyle: { fill: "var(--muted-foreground)", fontSize: 10, fontWeight: 500 },
     labelBgStyle: { fill: "var(--background)", fillOpacity: 0.92 },
     markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 },
-    animated: edge.kind === "coordination",
     data: { kind: edge.kind, channelId: edge.channelId },
     ...edgeStyle(edge.kind),
   }));
