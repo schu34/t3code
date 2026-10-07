@@ -1,170 +1,72 @@
 import * as Schema from "effect/Schema";
 
-import {
-  IsoDateTime,
-  NonNegativeInt,
-  ProjectId,
-  ThreadId,
-  TurnId,
-  TrimmedNonEmptyString,
-} from "./baseSchemas.ts";
-import { ProviderInstanceId } from "./providerInstance.ts";
+import { IsoDateTime, ProjectId, ThreadId, TurnId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
-/** Stable identity for a user-facing agent in the Harness graph. */
-export const HarnessAgentId = TrimmedNonEmptyString.pipe(Schema.brand("HarnessAgentId"));
-export type HarnessAgentId = typeof HarnessAgentId.Type;
+export const HarnessRoleId = TrimmedNonEmptyString.pipe(Schema.brand("HarnessRoleId"));
+export type HarnessRoleId = typeof HarnessRoleId.Type;
 
-export const HarnessRelationshipId = TrimmedNonEmptyString.pipe(
-  Schema.brand("HarnessRelationshipId"),
-);
-export type HarnessRelationshipId = typeof HarnessRelationshipId.Type;
-
-export const HarnessRoleDefinitionId = TrimmedNonEmptyString.pipe(
-  Schema.brand("HarnessRoleDefinitionId"),
-);
-export type HarnessRoleDefinitionId = typeof HarnessRoleDefinitionId.Type;
-
-export const HarnessRelationshipDefinitionId = TrimmedNonEmptyString.pipe(
-  Schema.brand("HarnessRelationshipDefinitionId"),
-);
-export type HarnessRelationshipDefinitionId = typeof HarnessRelationshipDefinitionId.Type;
-
-export const HarnessChannelId = TrimmedNonEmptyString.pipe(Schema.brand("HarnessChannelId"));
-export type HarnessChannelId = typeof HarnessChannelId.Type;
-
-export const HarnessCoordinationMessageId = TrimmedNonEmptyString.pipe(
-  Schema.brand("HarnessCoordinationMessageId"),
-);
-export type HarnessCoordinationMessageId = typeof HarnessCoordinationMessageId.Type;
-
-/** Structural origin of an agent in the graph; persona behavior lives in its role definition. */
-export const HarnessAgentKind = Schema.Literals(["root", "delegated", "sidechat"]);
-export type HarnessAgentKind = typeof HarnessAgentKind.Type;
+export const HarnessEdgeId = TrimmedNonEmptyString.pipe(Schema.brand("HarnessEdgeId"));
+export type HarnessEdgeId = typeof HarnessEdgeId.Type;
 
 export const HarnessAgentStatus = Schema.Literals(["active", "paused", "completed", "failed"]);
 export type HarnessAgentStatus = typeof HarnessAgentStatus.Type;
 
-export const HarnessMessageAuthorKind = Schema.Literals(["user", "agent"]);
-export type HarnessMessageAuthorKind = typeof HarnessMessageAuthorKind.Type;
-/** Operations the client can truthfully offer for a graph-backed agent. */
-export const HarnessAgentCapability = Schema.Literals(["inspect"]);
-export type HarnessAgentCapability = typeof HarnessAgentCapability.Type;
-
-const ThreadBackingReference = Schema.Struct({
-  kind: Schema.Literal("thread"),
-  threadId: ThreadId,
-});
-const NativeBackingReference = Schema.Struct({
-  kind: Schema.Literal("native"),
-  provider: TrimmedNonEmptyString,
-  providerInstanceId: Schema.optional(ProviderInstanceId),
-  providerAgentId: TrimmedNonEmptyString,
-  parentThreadId: ThreadId,
-});
-
-/** Stable locator persisted with graph metadata, not a second agent runtime. */
-export const HarnessAgentBackingReference = Schema.Union([
-  ThreadBackingReference,
-  NativeBackingReference,
-]);
-export type HarnessAgentBackingReference = typeof HarnessAgentBackingReference.Type;
-
-/** Backing details derived for the client; capabilities are not graph configuration. */
-export const HarnessAgentBacking = Schema.Union([
-  ThreadBackingReference,
-  Schema.Struct({
-    ...NativeBackingReference.fields,
-    capabilities: Schema.Array(HarnessAgentCapability),
-  }),
-]);
-export type HarnessAgentBacking = typeof HarnessAgentBacking.Type;
-
-export const HarnessRoleDefinition = Schema.Struct({
-  roleDefinitionId: HarnessRoleDefinitionId,
+/** Reusable instructions applied to every turn of the agents assigned to it. */
+export const HarnessRole = Schema.Struct({
+  roleId: HarnessRoleId,
   name: TrimmedNonEmptyString,
   instructions: Schema.String,
   createdAt: IsoDateTime,
-  updatedAt: IsoDateTime,
 });
-export type HarnessRoleDefinition = typeof HarnessRoleDefinition.Type;
+export type HarnessRole = typeof HarnessRole.Type;
 
-export const HarnessRelationshipDefinition = Schema.Struct({
-  relationshipDefinitionId: HarnessRelationshipDefinitionId,
-  name: TrimmedNonEmptyString,
-  requestInstructions: Schema.String,
-  responseInstructions: Schema.String,
-  createdAt: IsoDateTime,
-  updatedAt: IsoDateTime,
-});
-export type HarnessRelationshipDefinition = typeof HarnessRelationshipDefinition.Type;
-
-/** Graph-owned overlay; presentation and lifecycle belong to the backing. */
+/**
+ * Graph-owned data for one thread. Every project thread is an agent; a thread
+ * without stored metadata is a root agent with no role.
+ */
 export const HarnessAgentMetadata = Schema.Struct({
-  agentId: HarnessAgentId,
-  backing: HarnessAgentBackingReference,
-  kind: HarnessAgentKind,
-  roleDefinitionId: HarnessRoleDefinitionId,
-  spawnedByAgentId: Schema.optional(HarnessAgentId),
-  createdAt: IsoDateTime,
-  updatedAt: IsoDateTime,
+  threadId: ThreadId,
+  roleId: Schema.optional(HarnessRoleId),
+  /** Creator thread. Absent for root agents. */
+  parentThreadId: Schema.optional(ThreadId),
+  /** Parent turn a side chat was forked from. */
+  forkedFromTurnId: Schema.optional(TurnId),
 });
 export type HarnessAgentMetadata = typeof HarnessAgentMetadata.Type;
 
-/** Read-only UI view assembled from graph metadata and its current backing. */
+/**
+ * Read view assembled from metadata and the backing thread. Provider-native
+ * children are derived from provider activity, addressed by their child
+ * transcript thread id, and are inspect-only.
+ */
 export const HarnessAgent = Schema.Struct({
   ...HarnessAgentMetadata.fields,
-  backing: HarnessAgentBacking,
   projectId: ProjectId,
   displayName: TrimmedNonEmptyString,
   status: HarnessAgentStatus,
+  native: Schema.optional(
+    Schema.Struct({
+      provider: TrimmedNonEmptyString,
+      providerAgentId: TrimmedNonEmptyString,
+    }),
+  ),
 });
 export type HarnessAgent = typeof HarnessAgent.Type;
 
-export const HarnessRelationship = Schema.Struct({
-  relationshipId: HarnessRelationshipId,
-  sourceAgentId: HarnessAgentId,
-  targetAgentId: HarnessAgentId,
-  relationshipDefinitionId: HarnessRelationshipDefinitionId,
-  topic: Schema.optional(TrimmedNonEmptyString),
-  forkedFromTurnId: Schema.optional(TurnId),
+/** A user-drawn communication link between two agents, separate from creation. */
+export const HarnessEdge = Schema.Struct({
+  edgeId: HarnessEdgeId,
+  sourceThreadId: ThreadId,
+  targetThreadId: ThreadId,
+  label: Schema.optional(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
 });
-export type HarnessRelationship = typeof HarnessRelationship.Type;
-
-export const HarnessCoordinationMessage = Schema.Struct({
-  messageId: HarnessCoordinationMessageId,
-  channelId: HarnessChannelId,
-  senderAgentId: HarnessAgentId,
-  recipientAgentId: HarnessAgentId,
-  authorKind: HarnessMessageAuthorKind,
-  body: Schema.String,
-  sequence: Schema.Int.check(Schema.isGreaterThan(0)),
-  deduplicationKey: TrimmedNonEmptyString,
-  createdAt: IsoDateTime,
-});
-export type HarnessCoordinationMessage = typeof HarnessCoordinationMessage.Type;
-export const HarnessChannelSummary = Schema.Struct({
-  channelId: HarnessChannelId,
-  relationshipId: HarnessRelationshipId,
-  topic: TrimmedNonEmptyString,
-  messageCount: NonNegativeInt,
-  lastSequence: NonNegativeInt,
-  createdAt: IsoDateTime,
-});
-export type HarnessChannelSummary = typeof HarnessChannelSummary.Type;
-export const HarnessChannel = Schema.Struct({
-  ...HarnessChannelSummary.fields,
-  messages: Schema.Array(HarnessCoordinationMessage),
-});
-export type HarnessChannel = typeof HarnessChannel.Type;
+export type HarnessEdge = typeof HarnessEdge.Type;
 
 export const HarnessGraphSnapshot = Schema.Struct({
-  revision: NonNegativeInt,
   agents: Schema.Array(HarnessAgent),
-  relationships: Schema.Array(HarnessRelationship),
-  roleDefinitions: Schema.Array(HarnessRoleDefinition),
-  relationshipDefinitions: Schema.Array(HarnessRelationshipDefinition),
-  channels: Schema.Array(HarnessChannelSummary),
+  edges: Schema.Array(HarnessEdge),
+  roles: Schema.Array(HarnessRole),
 });
 export type HarnessGraphSnapshot = typeof HarnessGraphSnapshot.Type;
 
@@ -173,72 +75,32 @@ export const HarnessGraphReadInput = Schema.Struct({
 });
 export type HarnessGraphReadInput = typeof HarnessGraphReadInput.Type;
 
-export const HarnessGraphStreamEvent = Schema.Union([
-  Schema.Struct({
-    kind: Schema.Literal("snapshot"),
-    snapshot: HarnessGraphSnapshot,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("changed"),
-    snapshot: HarnessGraphSnapshot,
-  }),
-]);
-export type HarnessGraphStreamEvent = typeof HarnessGraphStreamEvent.Type;
-
-export const HarnessGetChannelInput = Schema.Struct({
-  channelId: HarnessChannelId,
-});
-export type HarnessGetChannelInput = typeof HarnessGetChannelInput.Type;
-
-export const HarnessRegisterAgentInput = Schema.Struct({
-  agentId: HarnessAgentId,
-  threadId: ThreadId,
-  kind: HarnessAgentKind,
-  roleDefinitionId: HarnessRoleDefinitionId,
-  spawnedByAgentId: Schema.optional(HarnessAgentId),
-});
-export type HarnessRegisterAgentInput = typeof HarnessRegisterAgentInput.Type;
-
-export const HarnessCreateRoleDefinitionInput = Schema.Struct({
-  roleDefinitionId: HarnessRoleDefinitionId,
+export const HarnessCreateRoleInput = Schema.Struct({
+  roleId: HarnessRoleId,
   name: TrimmedNonEmptyString,
   instructions: Schema.String,
 });
-export type HarnessCreateRoleDefinitionInput = typeof HarnessCreateRoleDefinitionInput.Type;
+export type HarnessCreateRoleInput = typeof HarnessCreateRoleInput.Type;
 
-export const HarnessCreateRelationshipDefinitionInput = Schema.Struct({
-  relationshipDefinitionId: HarnessRelationshipDefinitionId,
-  name: TrimmedNonEmptyString,
-  requestInstructions: Schema.String,
-  responseInstructions: Schema.String,
-});
-export type HarnessCreateRelationshipDefinitionInput =
-  typeof HarnessCreateRelationshipDefinitionInput.Type;
-
-export const HarnessUpsertRelationshipInput = Schema.Struct({
-  relationshipId: Schema.optional(HarnessRelationshipId),
-  sourceAgentId: HarnessAgentId,
-  targetAgentId: HarnessAgentId,
-  relationshipDefinitionId: HarnessRelationshipDefinitionId,
-  topic: Schema.optional(TrimmedNonEmptyString),
+/**
+ * Upserts a thread's graph metadata. An omitted role is left unchanged and
+ * `null` clears it. Creation origin can be set once and never changed.
+ */
+export const HarnessSetAgentInput = Schema.Struct({
+  threadId: ThreadId,
+  roleId: Schema.optional(Schema.NullOr(HarnessRoleId)),
+  parentThreadId: Schema.optional(ThreadId),
   forkedFromTurnId: Schema.optional(TurnId),
 });
-export type HarnessUpsertRelationshipInput = typeof HarnessUpsertRelationshipInput.Type;
+export type HarnessSetAgentInput = typeof HarnessSetAgentInput.Type;
 
-export const HarnessOpenChannelInput = Schema.Struct({
-  channelId: Schema.optional(HarnessChannelId),
-  relationshipId: HarnessRelationshipId,
-  topic: TrimmedNonEmptyString,
+export const HarnessUpsertEdgeInput = Schema.Struct({
+  edgeId: Schema.optional(HarnessEdgeId),
+  sourceThreadId: ThreadId,
+  targetThreadId: ThreadId,
+  label: Schema.optional(TrimmedNonEmptyString),
 });
-export type HarnessOpenChannelInput = typeof HarnessOpenChannelInput.Type;
-export const HarnessSendCoordinationMessageInput = Schema.Struct({
-  channelId: HarnessChannelId,
-  senderAgentId: HarnessAgentId,
-  authorKind: HarnessMessageAuthorKind,
-  body: Schema.String,
-  deduplicationKey: TrimmedNonEmptyString,
-});
-export type HarnessSendCoordinationMessageInput = typeof HarnessSendCoordinationMessageInput.Type;
+export type HarnessUpsertEdgeInput = typeof HarnessUpsertEdgeInput.Type;
 
 export class HarnessGraphValidationError extends Schema.TaggedError<HarnessGraphValidationError>()(
   "HarnessGraphValidationError",

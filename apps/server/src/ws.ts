@@ -179,8 +179,23 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
-const encodeUnknownJsonString = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
+const HARNESS_GRAPH_THREAD_EVENTS = new Set<string>([
+  "thread.created",
+  "thread.deleted",
+  "thread.archived",
+  "thread.unarchived",
+  "thread.settled",
+  "thread.unsettled",
+  "thread.meta-updated",
+  "thread.session-set",
+]);
+const HARNESS_GRAPH_TASK_ACTIVITIES = new Set<string>([
+  "task.started",
+  "task.progress",
+  "task.updated",
+  "task.completed",
+]);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -3747,33 +3762,19 @@ const makeWsRpcLayer = (
               const subscription = yield* PubSub.subscribe(harnessGraphChanges);
               const domainEvents = yield* orchestrationEngine.subscribeDomainEvents;
               const initial = yield* graphStore.read(input);
-              const nativeChanges = domainEvents.pipe(
+              // Thread lifecycle and native child activity change derived agents; ordinary
+              // assistant text does not.
+              const threadChanges = domainEvents.pipe(
                 Stream.filter((event) => {
                   if (event.type !== "thread.activity-appended")
-                    return [
-                      "thread.created",
-                      "thread.deleted",
-                      "thread.archived",
-                      "thread.unarchived",
-                      "thread.settled",
-                      "thread.unsettled",
-                      "thread.meta-updated",
-                      "thread.session-set",
-                    ].includes(event.type);
+                    return HARNESS_GRAPH_THREAD_EVENTS.has(event.type);
                   const activity = event.payload.activity;
-                  if (
-                    activity.kind === "task.started" ||
-                    activity.kind === "task.progress" ||
-                    activity.kind === "task.updated" ||
-                    activity.kind === "task.completed"
-                  ) {
-                    return true;
-                  }
                   return (
-                    typeof activity.payload === "object" &&
-                    activity.payload !== null &&
-                    (activity.payload as { readonly itemType?: unknown }).itemType ===
-                      "collab_agent_tool_call"
+                    HARNESS_GRAPH_TASK_ACTIVITIES.has(activity.kind) ||
+                    (typeof activity.payload === "object" &&
+                      activity.payload !== null &&
+                      (activity.payload as { readonly itemType?: unknown }).itemType ===
+                        "collab_agent_tool_call")
                   );
                 }),
                 Stream.debounce(Duration.millis(100)),
@@ -3781,59 +3782,22 @@ const makeWsRpcLayer = (
               );
               const changes = Stream.merge(
                 Stream.fromSubscription(subscription),
-                nativeChanges,
-              ).pipe(
-                Stream.mapEffect(() =>
-                  graphStore
-                    .read(input)
-                    .pipe(Effect.map((snapshot) => ({ kind: "changed" as const, snapshot }))),
-                ),
-              );
-              return Stream.concat(
-                Stream.make({ kind: "snapshot" as const, snapshot: initial }),
-                changes,
-              );
+                threadChanges,
+              ).pipe(Stream.mapEffect(() => graphStore.read(input)));
+              return Stream.concat(Stream.make(initial), changes);
             }),
             { "rpc.aggregate": "harness" },
           ),
-        [WS_METHODS.harnessGraphGetChannel]: (input) =>
-          observeHarnessRpcEffect(
-            WS_METHODS.harnessGraphGetChannel,
-            graphStore.getChannel(input.channelId),
-            { "rpc.aggregate": "harness" },
-          ),
-        [WS_METHODS.harnessGraphCreateRoleDefinition]: (input) =>
-          observeHarnessRpcEffect(
-            WS_METHODS.harnessGraphCreateRoleDefinition,
-            graphStore.createRole(input),
-            { "rpc.aggregate": "harness" },
-          ),
-        [WS_METHODS.harnessGraphCreateRelationshipDefinition]: (input) =>
-          observeHarnessRpcEffect(
-            WS_METHODS.harnessGraphCreateRelationshipDefinition,
-            graphStore.createDefinition(input),
-            { "rpc.aggregate": "harness" },
-          ),
-        [WS_METHODS.harnessGraphRegisterAgent]: (input) =>
-          observeHarnessRpcEffect(
-            WS_METHODS.harnessGraphRegisterAgent,
-            graphStore.registerAgent(input),
-            { "rpc.aggregate": "harness" },
-          ),
-        [WS_METHODS.harnessGraphUpsertRelationship]: (input) =>
-          observeHarnessRpcEffect(
-            WS_METHODS.harnessGraphUpsertRelationship,
-            graphStore.upsertRelationship(input),
-            { "rpc.aggregate": "harness" },
-          ),
-        [WS_METHODS.harnessGraphOpenChannel]: (input) =>
-          observeHarnessRpcEffect(
-            WS_METHODS.harnessGraphOpenChannel,
-            graphStore.openChannel(input),
-            { "rpc.aggregate": "harness" },
-          ),
-        [WS_METHODS.harnessGraphSendCoordination]: (input) =>
-          observeHarnessRpcEffect(WS_METHODS.harnessGraphSendCoordination, graphStore.send(input), {
+        [WS_METHODS.harnessGraphCreateRole]: (input) =>
+          observeHarnessRpcEffect(WS_METHODS.harnessGraphCreateRole, graphStore.createRole(input), {
+            "rpc.aggregate": "harness",
+          }),
+        [WS_METHODS.harnessGraphSetAgent]: (input) =>
+          observeHarnessRpcEffect(WS_METHODS.harnessGraphSetAgent, graphStore.setAgent(input), {
+            "rpc.aggregate": "harness",
+          }),
+        [WS_METHODS.harnessGraphUpsertEdge]: (input) =>
+          observeHarnessRpcEffect(WS_METHODS.harnessGraphUpsertEdge, graphStore.upsertEdge(input), {
             "rpc.aggregate": "harness",
           }),
       });
