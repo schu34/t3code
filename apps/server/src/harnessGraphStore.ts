@@ -379,15 +379,14 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
     return agent;
   });
   const relationships = Effect.gen(function* () {
-    const rows =
-      yield* sql<RelationshipRow>`
-        SELECT
-          *
-        FROM harness_relationships
-        ORDER BY
-          created_at,
-          relationship_id
-      `;
+    const rows = yield* sql<RelationshipRow>`
+      SELECT
+        *
+      FROM harness_relationships
+      ORDER BY
+        created_at,
+        relationship_id
+    `;
     return rows.map((row) => ({
       relationshipId: HarnessRelationshipId.make(row.relationship_id),
       sourceAgentId: HarnessAgentId.make(row.source_agent_id),
@@ -495,15 +494,14 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
     yield* sync;
     const row = (yield* channelRows).find((row) => row.channel_id === id);
     if (!row) return yield* invalid("The channel does not exist.");
-    const messages =
-      yield* sql<MessageRow>`
-        SELECT
-          *
-        FROM harness_coordination_messages
-        WHERE channel_id = ${id}
-        ORDER BY
-          sequence
-      `;
+    const messages = yield* sql<MessageRow>`
+      SELECT
+        *
+      FROM harness_coordination_messages
+      WHERE channel_id = ${id}
+      ORDER BY
+        sequence
+    `;
     return {
       ...channelSummary(row),
       messages: messages.map((m) => ({
@@ -563,21 +561,20 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
         const byId = yield* threads;
         if (!byId.has(input.threadId))
           return yield* invalid("Create the backing thread before registering an agent.");
-        const roles =
-          yield* sql`
-            SELECT
-              role_definition_id
-            FROM harness_role_definitions
-            WHERE role_definition_id = ${input.roleDefinitionId}
-          `;
+        const roles = yield* sql`
+          SELECT
+            role_definition_id
+          FROM harness_role_definitions
+          WHERE role_definition_id = ${input.roleDefinitionId}
+        `;
         if (roles.length === 0) return yield* invalid("The role definition does not exist.");
         const existing = (yield* sql<AgentMetadataRow>`
+          SELECT
+            *
+          FROM harness_agents
+          WHERE agent_id = ${input.agentId}
+        `)[0];
 
-            SELECT
-              *
-            FROM harness_agents
-            WHERE agent_id = ${input.agentId}
-          `)[0];
         if (
           existing &&
           (existing.thread_id !== input.threadId ||
@@ -596,12 +593,12 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
               return yield* invalid("Creation origin cannot contain a cycle.");
             visited.add(ancestor);
             const row: AgentMetadataRow | undefined = (yield* sql<AgentMetadataRow>`
+              SELECT
+                *
+              FROM harness_agents
+              WHERE agent_id = ${ancestor}
+            `)[0];
 
-                SELECT
-                  *
-                FROM harness_agents
-                WHERE agent_id = ${ancestor}
-              `)[0];
             ancestor = row?.spawned_by_agent_id ?? null;
           }
           const creator = yield* requireAgent(input.spawnedByAgentId);
@@ -649,23 +646,21 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
     const target = yield* requireAgent(input.targetAgentId);
     if (source.projectId !== target.projectId)
       return yield* invalid("Relationship endpoints must belong to the same project.");
-    const definitions =
-      yield* sql`
-        SELECT
-          relationship_definition_id
-        FROM harness_relationship_definitions
-        WHERE relationship_definition_id = ${input.relationshipDefinitionId}
-      `;
+    const definitions = yield* sql`
+      SELECT
+        relationship_definition_id
+      FROM harness_relationship_definitions
+      WHERE relationship_definition_id = ${input.relationshipDefinitionId}
+    `;
     if (definitions.length === 0)
       return yield* invalid("The relationship definition does not exist.");
     const id = input.relationshipId ?? HarnessRelationshipId.make(yield* crypto.randomUUIDv4);
-    const existing =
-      (yield* sql<RelationshipRow>`
-        SELECT
-          *
-        FROM harness_relationships
-        WHERE relationship_id = ${id}
-      `)[0];
+    const existing = (yield* sql<RelationshipRow>`
+      SELECT
+        *
+      FROM harness_relationships
+      WHERE relationship_id = ${id}
+    `)[0];
     if (
       existing &&
       (existing.source_agent_id !== source.agentId || existing.target_agent_id !== target.agentId)
@@ -723,15 +718,14 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
   });
   const send = Effect.fnUntraced(function* (input: HarnessSendCoordinationMessageInput) {
     yield* sync;
-    const row =
-      (yield* sql<RelationshipRow>`
-        SELECT
-          r.*
-        FROM harness_channels c
-        JOIN harness_relationships r
-        ON r.relationship_id = c.relationship_id
-        WHERE c.channel_id = ${input.channelId}
-      `)[0];
+    const row = (yield* sql<RelationshipRow>`
+      SELECT
+        r.*
+      FROM harness_channels c
+      JOIN harness_relationships r
+      ON r.relationship_id = c.relationship_id
+      WHERE c.channel_id = ${input.channelId}
+    `)[0];
     if (!row) return yield* invalid("The channel does not exist.");
     const isSource = row.source_agent_id === input.senderAgentId;
     if (!isSource && row.target_agent_id !== input.senderAgentId)
