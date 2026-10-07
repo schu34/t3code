@@ -23,6 +23,7 @@ import { SidebarInset } from "./ui/sidebar";
 import HarnessCanvas from "./HarnessCanvas";
 import {
   buildHarnessCanvasSnapshotFromThreads,
+  deriveHarnessCreationEdges,
   layoutHarnessCanvasAgents,
   type HarnessCanvasActions,
   type HarnessCanvasAgent,
@@ -116,26 +117,39 @@ function buildSnapshot(
       return serverAgent === undefined ? [] : [[agent.id, serverAgent.agentId] as const];
     }),
   );
+  const localIdByServerId = new Map(
+    [...serverIdByLocalId].map(([localId, serverId]) => [serverId, localId] as const),
+  );
+  const agentsWithProvenance = allAgents.map((agent) => {
+    const metadata = graphAgentFor(graph, agent);
+    return {
+      ...agent,
+      kind: metadata?.kind ?? agent.kind,
+      spawnedByAgentId:
+        metadata?.spawnedByAgentId === undefined
+          ? null
+          : (localIdByServerId.get(metadata.spawnedByAgentId) ?? null),
+      // Base positions are fallback layout, not user-dragged session positions.
+      position: null,
+    };
+  });
   const edges = [
+    ...deriveHarnessCreationEdges(agentsWithProvenance),
     ...graph.relationships.flatMap((relationship) => {
-      const source = allAgents.find(
-        (agent) => serverIdByLocalId.get(agent.id) === relationship.sourceAgentId,
-      );
-      const target = allAgents.find(
-        (agent) => serverIdByLocalId.get(agent.id) === relationship.targetAgentId,
-      );
+      const source = localIdByServerId.get(relationship.sourceAgentId);
+      const target = localIdByServerId.get(relationship.targetAgentId);
       return source === undefined || target === undefined
         ? []
         : [
             {
               id: relationship.relationshipId,
-              source: source.id,
-              target: target.id,
-              kind: relationship.structure,
+              source,
+              target,
+              kind: "coordination",
               label:
                 graph.relationshipDefinitions.find(
                   (d) => d.relationshipDefinitionId === relationship.relationshipDefinitionId,
-                )?.name ?? relationship.structure,
+                )?.name ?? "Communication",
               channelId:
                 graph.channels.find((c) => c.relationshipId === relationship.relationshipId)
                   ?.channelId ?? null,
@@ -143,7 +157,7 @@ function buildSnapshot(
           ];
     }),
   ];
-  const agents = layoutHarnessCanvasAgents(allAgents, { topInset: 280, edges });
+  const agents = layoutHarnessCanvasAgents(agentsWithProvenance, { topInset: 280 });
   const channels: ReadonlyArray<HarnessCanvasChannel> = graph.channels.flatMap((channel) => {
     const relationship = graph.relationships.find(
       (r) => r.relationshipId === channel.relationshipId,
@@ -320,7 +334,6 @@ export default function HarnessWorkspace() {
         await run(upsertRelationship, {
           sourceAgentId: parentServerId,
           targetAgentId: childServerId,
-          structure: "delegation" as const,
           relationshipDefinitionId,
         });
       },
@@ -341,7 +354,6 @@ export default function HarnessWorkspace() {
         await run(upsertRelationship, {
           sourceAgentId: parentServerId,
           targetAgentId: sidechatServerId,
-          structure: "sidechat" as const,
           relationshipDefinitionId: HarnessRelationshipDefinitionId.make("builtin:sidechat"),
           forkedFromTurnId: completedTurnId as TurnId,
         });
@@ -355,7 +367,6 @@ export default function HarnessWorkspace() {
         await run(upsertRelationship, {
           sourceAgentId: source,
           targetAgentId: target,
-          structure: "sidechat" as const,
           relationshipDefinitionId,
           topic:
             graph?.relationshipDefinitions.find(
