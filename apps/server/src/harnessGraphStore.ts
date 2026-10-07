@@ -72,15 +72,36 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
   const query = yield* ProjectionSnapshotQuery;
   const crypto = yield* Crypto.Crypto;
   const publish = PubSub.publish(changes, undefined);
-  const bump = sql`UPDATE harness_graph_meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'revision'`;
+  const bump = sql`
+    UPDATE harness_graph_meta
+    SET
+      value = CAST(value AS INTEGER) + 1
+    WHERE key = 'revision'
+  `;
   const builtins = Effect.gen(function* () {
     const now = yield* nowIso;
-    yield* sql`INSERT OR IGNORE INTO harness_role_definitions VALUES
-      ('builtin:general', 'General agent', 'Follow the user’s task and report progress clearly.', ${now}, ${now})`;
+    yield* sql`
+      INSERT OR IGNORE INTO harness_role_definitions
+      VALUES (
+        'builtin:general',
+        'General agent',
+        'Follow the user’s task and report progress clearly.',
+        ${now},
+        ${now}
+      )
+    `;
     for (const structure of ["delegation", "sidechat"]) {
-      yield* sql`INSERT OR IGNORE INTO harness_relationship_definitions VALUES
-        (${`builtin:${structure}`}, ${structure}, 'Describe the task and relevant context.',
-         'Respond with the result, rationale, and any blockers.', ${now}, ${now})`;
+      yield* sql`
+        INSERT OR IGNORE INTO harness_relationship_definitions
+        VALUES (
+          ${`builtin:${structure}`},
+          ${structure},
+          'Describe the task and relevant context.',
+          'Respond with the result, rationale, and any blockers.',
+          ${now},
+          ${now}
+        )
+      `;
     }
   });
   const threads = Effect.gen(function* () {
@@ -91,10 +112,18 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
   const sync = Effect.gen(function* () {
     yield* builtins;
     const byId = yield* threads;
-    const rows = yield* sql<AgentRow>`SELECT * FROM harness_agents`;
+    const rows = yield* sql<AgentRow>`
+      SELECT
+        *
+      FROM harness_agents
+    `;
     for (const row of rows) {
       if (!byId.has(ThreadId.make(row.thread_id))) {
-        yield* sql`DELETE FROM harness_agents WHERE agent_id = ${row.agent_id}`;
+        yield* sql`
+          DELETE
+          FROM harness_agents
+          WHERE agent_id = ${row.agent_id}
+        `;
         yield* bump;
       }
     }
@@ -102,15 +131,38 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
     for (const thread of byId.values()) {
       if (existing.has(thread.id)) continue;
       const now = yield* nowIso;
-      yield* sql`INSERT OR IGNORE INTO harness_agents (agent_id, thread_id, kind, role_definition_id, created_at, updated_at)
-        VALUES (${thread.id}, ${thread.id}, 'root', 'builtin:general', ${now}, ${now})`;
+      yield* sql`
+        INSERT OR IGNORE INTO harness_agents (
+          agent_id,
+          thread_id,
+          kind,
+          role_definition_id,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${thread.id},
+          ${thread.id},
+          'root',
+          'builtin:general',
+          ${now},
+          ${now}
+        )
+      `;
       yield* bump;
     }
     return byId;
   });
   const agents = Effect.gen(function* () {
     const byId = yield* sync;
-    const rows = yield* sql<AgentRow>`SELECT * FROM harness_agents ORDER BY created_at, agent_id`;
+    const rows = yield* sql<AgentRow>`
+      SELECT
+        *
+      FROM harness_agents
+      ORDER BY
+        created_at,
+        agent_id
+    `;
     return rows.flatMap((row) => {
       const thread = byId.get(ThreadId.make(row.thread_id));
       if (!thread) return [];
@@ -146,8 +198,14 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
     return agent;
   });
   const relationships = Effect.gen(function* () {
-    const rows =
-      yield* sql<RelationshipRow>`SELECT * FROM harness_relationships ORDER BY created_at, relationship_id`;
+    const rows = yield* sql<RelationshipRow>`
+        SELECT
+          *
+        FROM harness_relationships
+        ORDER BY
+          created_at,
+          relationship_id
+      `;
     return rows.map((row) => ({
       relationshipId: HarnessRelationshipId.make(row.relationship_id),
       sourceAgentId: HarnessAgentId.make(row.source_agent_id),
@@ -163,10 +221,16 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
       createdAt: row.created_at,
     }));
   });
-  const channelRows = sql<ChannelRow>`SELECT c.*,
-    (SELECT COUNT(*) FROM harness_coordination_messages m WHERE m.channel_id = c.channel_id) AS message_count,
-    (SELECT COALESCE(MAX(sequence), 0) FROM harness_coordination_messages m WHERE m.channel_id = c.channel_id) AS last_sequence
-    FROM harness_channels c ORDER BY c.created_at, c.channel_id`;
+  const channelRows = sql<ChannelRow>`
+    SELECT
+      c.*,
+      (SELECT COUNT(*) FROM harness_coordination_messages m WHERE m.channel_id = c.channel_id) AS message_count,
+      (SELECT COALESCE(MAX(sequence), 0) FROM harness_coordination_messages m WHERE m.channel_id = c.channel_id) AS last_sequence
+    FROM harness_channels c
+    ORDER BY
+      c.created_at,
+      c.channel_id
+  `;
   const channelSummary = (row: ChannelRow) => ({
     channelId: HarnessChannelId.make(row.channel_id),
     relationshipId: HarnessRelationshipId.make(row.relationship_id),
@@ -191,7 +255,13 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
       instructions: string;
       created_at: string;
       updated_at: string;
-    }>`SELECT * FROM harness_role_definitions ORDER BY name`;
+    }>`
+      SELECT
+        *
+      FROM harness_role_definitions
+      ORDER BY
+        name
+    `;
     const definitionRows = yield* sql<{
       relationship_definition_id: string;
       name: string;
@@ -199,10 +269,21 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
       response_instructions: string;
       created_at: string;
       updated_at: string;
-    }>`SELECT * FROM harness_relationship_definitions ORDER BY name`;
+    }>`
+      SELECT
+        *
+      FROM harness_relationship_definitions
+      ORDER BY
+        name
+    `;
     const revision = yield* sql<{
       value: string;
-    }>`SELECT value FROM harness_graph_meta WHERE key = 'revision'`;
+    }>`
+      SELECT
+        value
+      FROM harness_graph_meta
+      WHERE key = 'revision'
+    `;
     return {
       revision: Number(revision[0]?.value ?? 0),
       agents: visibleAgents,
@@ -233,8 +314,14 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
     yield* sync;
     const row = (yield* channelRows).find((row) => row.channel_id === id);
     if (!row) return yield* invalid("The channel does not exist.");
-    const messages =
-      yield* sql<MessageRow>`SELECT * FROM harness_coordination_messages WHERE channel_id = ${id} ORDER BY sequence`;
+    const messages = yield* sql<MessageRow>`
+        SELECT
+          *
+        FROM harness_coordination_messages
+        WHERE channel_id = ${id}
+        ORDER BY
+          sequence
+      `;
     return {
       ...channelSummary(row),
       messages: messages.map((m) => ({
@@ -253,7 +340,16 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
   const createRole = Effect.fnUntraced(function* (input: HarnessCreateRoleDefinitionInput) {
     yield* builtins;
     const now = yield* nowIso;
-    yield* sql`INSERT INTO harness_role_definitions VALUES (${input.roleDefinitionId}, ${input.name}, ${input.instructions}, ${now}, ${now})`;
+    yield* sql`
+      INSERT INTO harness_role_definitions
+      VALUES (
+        ${input.roleDefinitionId},
+        ${input.name},
+        ${input.instructions},
+        ${now},
+        ${now}
+      )
+    `;
     yield* bump;
     yield* publish;
     return { ...input, createdAt: now, updatedAt: now };
@@ -263,7 +359,17 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
   ) {
     yield* builtins;
     const now = yield* nowIso;
-    yield* sql`INSERT INTO harness_relationship_definitions VALUES (${input.relationshipDefinitionId}, ${input.name}, ${input.requestInstructions}, ${input.responseInstructions}, ${now}, ${now})`;
+    yield* sql`
+      INSERT INTO harness_relationship_definitions
+      VALUES (
+        ${input.relationshipDefinitionId},
+        ${input.name},
+        ${input.requestInstructions},
+        ${input.responseInstructions},
+        ${now},
+        ${now}
+      )
+    `;
     yield* bump;
     yield* publish;
     return { ...input, createdAt: now, updatedAt: now };
@@ -275,11 +381,19 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
         const byId = yield* threads;
         if (!byId.has(input.threadId))
           return yield* invalid("Create the backing thread before registering an agent.");
-        const roles =
-          yield* sql`SELECT role_definition_id FROM harness_role_definitions WHERE role_definition_id = ${input.roleDefinitionId}`;
+        const roles = yield* sql`
+            SELECT
+              role_definition_id
+            FROM harness_role_definitions
+            WHERE role_definition_id = ${input.roleDefinitionId}
+          `;
         if (roles.length === 0) return yield* invalid("The role definition does not exist.");
-        const existing =
-          (yield* sql<AgentRow>`SELECT * FROM harness_agents WHERE agent_id = ${input.agentId}`)[0];
+        const existing = (yield* sql<AgentRow>`
+            SELECT
+              *
+            FROM harness_agents
+            WHERE agent_id = ${input.agentId}
+          `)[0];
         if (
           existing &&
           (existing.thread_id !== input.threadId ||
@@ -297,8 +411,12 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
             if (ancestor === input.agentId || visited.has(ancestor))
               return yield* invalid("Creation origin cannot contain a cycle.");
             visited.add(ancestor);
-            const row: AgentRow | undefined =
-              (yield* sql<AgentRow>`SELECT * FROM harness_agents WHERE agent_id = ${ancestor}`)[0];
+            const row: AgentRow | undefined = (yield* sql<AgentRow>`
+                SELECT
+                  *
+                FROM harness_agents
+                WHERE agent_id = ${ancestor}
+              `)[0];
             ancestor = row?.spawned_by_agent_id ?? null;
           }
           const creator = yield* requireAgent(input.spawnedByAgentId);
@@ -306,8 +424,33 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
             return yield* invalid("The creator must belong to the same project.");
         }
         const now = yield* nowIso;
-        yield* sql`INSERT INTO harness_agents (agent_id, thread_id, kind, role_definition_id, spawned_by_agent_id, created_at, updated_at) VALUES (${input.agentId}, ${input.threadId}, ${input.kind}, ${input.roleDefinitionId}, ${input.spawnedByAgentId ?? null}, ${now}, ${now})
-      ON CONFLICT (agent_id) DO UPDATE SET role_definition_id = excluded.role_definition_id, kind = excluded.kind, spawned_by_agent_id = excluded.spawned_by_agent_id, updated_at = excluded.updated_at`;
+        yield* sql`
+          INSERT INTO harness_agents (
+            agent_id,
+            thread_id,
+            kind,
+            role_definition_id,
+            spawned_by_agent_id,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            ${input.agentId},
+            ${input.threadId},
+            ${input.kind},
+            ${input.roleDefinitionId},
+            ${input.spawnedByAgentId ?? null},
+            ${now},
+            ${now}
+          )
+          ON CONFLICT (agent_id)
+          DO UPDATE
+          SET
+            role_definition_id = excluded.role_definition_id,
+            kind = excluded.kind,
+            spawned_by_agent_id = excluded.spawned_by_agent_id,
+            updated_at = excluded.updated_at
+        `;
         yield* bump;
         yield* publish;
         return yield* requireAgent(input.agentId);
@@ -321,21 +464,45 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
     const target = yield* requireAgent(input.targetAgentId);
     if (source.projectId !== target.projectId)
       return yield* invalid("Relationship endpoints must belong to the same project.");
-    const definitions =
-      yield* sql`SELECT relationship_definition_id FROM harness_relationship_definitions WHERE relationship_definition_id = ${input.relationshipDefinitionId}`;
+    const definitions = yield* sql`
+        SELECT
+          relationship_definition_id
+        FROM harness_relationship_definitions
+        WHERE relationship_definition_id = ${input.relationshipDefinitionId}
+      `;
     if (definitions.length === 0)
       return yield* invalid("The relationship definition does not exist.");
     const id = input.relationshipId ?? HarnessRelationshipId.make(yield* crypto.randomUUIDv4);
-    const existing =
-      (yield* sql<RelationshipRow>`SELECT * FROM harness_relationships WHERE relationship_id = ${id}`)[0];
+    const existing = (yield* sql<RelationshipRow>`
+        SELECT
+          *
+        FROM harness_relationships
+        WHERE relationship_id = ${id}
+      `)[0];
     if (
       existing &&
       (existing.source_agent_id !== source.agentId || existing.target_agent_id !== target.agentId)
     )
       return yield* invalid("Relationship endpoints cannot be changed.");
     const now = yield* nowIso;
-    yield* sql`INSERT INTO harness_relationships VALUES (${id}, ${source.agentId}, ${target.agentId}, ${input.structure}, ${input.relationshipDefinitionId}, ${input.topic ?? null}, ${input.forkedFromTurnId ?? null}, ${now})
-      ON CONFLICT (relationship_id) DO UPDATE SET relationship_definition_id = excluded.relationship_definition_id, topic = excluded.topic`;
+    yield* sql`
+      INSERT INTO harness_relationships
+      VALUES (
+        ${id},
+        ${source.agentId},
+        ${target.agentId},
+        ${input.structure},
+        ${input.relationshipDefinitionId},
+        ${input.topic ?? null},
+        ${input.forkedFromTurnId ?? null},
+        ${now}
+      )
+      ON CONFLICT (relationship_id)
+      DO UPDATE
+      SET
+        relationship_definition_id = excluded.relationship_definition_id,
+        topic = excluded.topic
+    `;
     yield* bump;
     yield* publish;
     return yield* read();
@@ -346,15 +513,30 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
       return yield* invalid("The relationship does not exist.");
     const id = input.channelId ?? HarnessChannelId.make(yield* crypto.randomUUIDv4);
     const now = yield* nowIso;
-    yield* sql`INSERT INTO harness_channels VALUES (${id}, ${input.relationshipId}, ${input.topic}, ${now}) ON CONFLICT (relationship_id) DO NOTHING`;
+    yield* sql`
+      INSERT INTO harness_channels
+      VALUES (
+        ${id},
+        ${input.relationshipId},
+        ${input.topic},
+        ${now}
+      )
+      ON CONFLICT (relationship_id) DO NOTHING
+    `;
     yield* bump;
     yield* publish;
     return yield* read();
   });
   const send = Effect.fnUntraced(function* (input: HarnessSendCoordinationMessageInput) {
     yield* sync;
-    const row =
-      (yield* sql<RelationshipRow>`SELECT r.* FROM harness_channels c JOIN harness_relationships r ON r.relationship_id = c.relationship_id WHERE c.channel_id = ${input.channelId}`)[0];
+    const row = (yield* sql<RelationshipRow>`
+        SELECT
+          r.*
+        FROM harness_channels c
+        JOIN harness_relationships r
+        ON r.relationship_id = c.relationship_id
+        WHERE c.channel_id = ${input.channelId}
+      `)[0];
     if (!row) return yield* invalid("The channel does not exist.");
     const isSource = row.source_agent_id === input.senderAgentId;
     if (!isSource && row.target_agent_id !== input.senderAgentId)
@@ -362,11 +544,26 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
     const id = yield* crypto.randomUUIDv4;
     const now = yield* nowIso;
     // One INSERT allocates ordering and deduplicates atomically, even across concurrent senders.
-    yield* sql`INSERT INTO harness_coordination_messages
-      SELECT ${id}, ${input.channelId}, ${input.senderAgentId}, ${isSource ? row.target_agent_id : row.source_agent_id},
-             ${input.authorKind}, ${input.body}, COALESCE(MAX(sequence), 0) + 1, ${input.deduplicationKey}, ${now}
-      FROM harness_coordination_messages WHERE channel_id = ${input.channelId}
-      ON CONFLICT (channel_id, sender_agent_id, deduplication_key) DO NOTHING`;
+    yield* sql`
+      INSERT INTO harness_coordination_messages
+      SELECT
+        ${id},
+        ${input.channelId},
+        ${input.senderAgentId},
+        ${isSource ? row.target_agent_id : row.source_agent_id},
+        ${input.authorKind},
+        ${input.body},
+        COALESCE(MAX(sequence), 0) + 1,
+        ${input.deduplicationKey},
+        ${now}
+      FROM harness_coordination_messages
+      WHERE channel_id = ${input.channelId}
+      ON CONFLICT (
+        channel_id,
+        sender_agent_id,
+        deduplication_key
+      ) DO NOTHING
+    `;
     yield* bump;
     yield* publish;
     return yield* read();
