@@ -8,7 +8,7 @@ import {
   HarnessRoleDefinitionId,
   ThreadId,
   TurnId,
-  type HarnessAgent,
+  type HarnessAgentMetadata,
   type HarnessCreateRelationshipDefinitionInput,
   type HarnessCreateRoleDefinitionInput,
   type HarnessGraphReadInput,
@@ -27,15 +27,28 @@ import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnap
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const invalid = (detail: string) =>
   new HarnessGraphValidationError({ operation: "harness-graph", detail });
-type AgentRow = {
+type AgentMetadataRow = {
   agent_id: string;
   thread_id: string;
-  kind: HarnessAgent["kind"];
+  kind: HarnessAgentMetadata["kind"];
   role_definition_id: string;
   spawned_by_agent_id: string | null;
   created_at: string;
   updated_at: string;
 };
+const toAgentMetadata = (row: AgentMetadataRow) =>
+  ({
+    agentId: HarnessAgentId.make(row.agent_id),
+    backing: { kind: "thread" as const, threadId: ThreadId.make(row.thread_id) },
+    kind: row.kind,
+    roleDefinitionId: HarnessRoleDefinitionId.make(row.role_definition_id),
+    ...(row.spawned_by_agent_id === null
+      ? {}
+      : { spawnedByAgentId: HarnessAgentId.make(row.spawned_by_agent_id) }),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }) satisfies HarnessAgentMetadata;
+
 type RelationshipRow = {
   relationship_id: string;
   source_agent_id: string;
@@ -112,7 +125,7 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
   const sync = Effect.gen(function* () {
     yield* builtins;
     const byId = yield* threads;
-    const rows = yield* sql<AgentRow>`
+    const rows = yield* sql<AgentMetadataRow>`
       SELECT
         *
       FROM harness_agents
@@ -155,7 +168,7 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
   });
   const agents = Effect.gen(function* () {
     const byId = yield* sync;
-    const rows = yield* sql<AgentRow>`
+    const rows = yield* sql<AgentMetadataRow>`
       SELECT
         *
       FROM harness_agents
@@ -176,17 +189,10 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
               : ("active" as const);
       return [
         {
-          agentId: HarnessAgentId.make(row.agent_id),
-          backing: { kind: "thread" as const, threadId: thread.id },
+          ...toAgentMetadata(row),
           projectId: thread.projectId,
           displayName: thread.title,
-          kind: row.kind,
-          roleDefinitionId: HarnessRoleDefinitionId.make(row.role_definition_id),
           status,
-          ...(row.spawned_by_agent_id === null
-            ? {}
-            : { spawnedByAgentId: HarnessAgentId.make(row.spawned_by_agent_id) }),
-          createdAt: row.created_at,
           updatedAt: thread.updatedAt,
         },
       ];
@@ -388,7 +394,7 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
             WHERE role_definition_id = ${input.roleDefinitionId}
           `;
         if (roles.length === 0) return yield* invalid("The role definition does not exist.");
-        const existing = (yield* sql<AgentRow>`
+        const existing = (yield* sql<AgentMetadataRow>`
             SELECT
               *
             FROM harness_agents
@@ -411,7 +417,7 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
             if (ancestor === input.agentId || visited.has(ancestor))
               return yield* invalid("Creation origin cannot contain a cycle.");
             visited.add(ancestor);
-            const row: AgentRow | undefined = (yield* sql<AgentRow>`
+            const row: AgentMetadataRow | undefined = (yield* sql<AgentMetadataRow>`
                 SELECT
                   *
                 FROM harness_agents
