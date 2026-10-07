@@ -60,10 +60,6 @@ export default Effect.gen(function* () {
       relationship_id TEXT PRIMARY KEY,
       source_agent_id TEXT NOT NULL REFERENCES harness_agents (agent_id) ON DELETE CASCADE,
       target_agent_id TEXT NOT NULL REFERENCES harness_agents (agent_id) ON DELETE CASCADE,
-      structure TEXT NOT NULL CHECK (structure IN (
-        'delegation',
-        'sidechat'
-      )),
       relationship_definition_id TEXT NOT NULL REFERENCES harness_relationship_definitions (relationship_definition_id),
       topic TEXT,
       forked_from_turn_id TEXT,

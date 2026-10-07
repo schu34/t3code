@@ -5,6 +5,7 @@ import {
   HarnessAgentMetadata,
   HarnessCreateRelationshipDefinitionInput,
   HarnessSendCoordinationMessageInput,
+  HarnessUpsertRelationshipInput,
 } from "./harnessGraph.ts";
 const decodeAgent = Schema.decodeUnknownSync(HarnessAgent);
 const decodeMetadata = Schema.decodeUnknownSync(HarnessAgentMetadata);
@@ -56,6 +57,20 @@ describe("Harness MVP contracts", () => {
         responseInstructions: "Review the change.",
       }),
     ).toMatchObject({ name: "Review" });
+  });
+  it("connects agents through behavior without encoding their creation hierarchy", () => {
+    const link = Schema.decodeUnknownSync(HarnessUpsertRelationshipInput)({
+      relationshipId: "review-link",
+      sourceAgentId: "implementor",
+      targetAgentId: "reviewer",
+      relationshipDefinitionId: "review",
+    });
+    expect(link).toEqual({
+      relationshipId: "review-link",
+      sourceAgentId: "implementor",
+      targetAgentId: "reviewer",
+      relationshipDefinitionId: "review",
+    });
   });
   it("accepts plain messages without a negotiation protocol", () => {
     expect(

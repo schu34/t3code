@@ -112,6 +112,12 @@ layer("055_HarnessGraph", (it) => {
         ],
       );
       assert.equal(migration.length, 1);
+      const columns = yield* sql<{ readonly name: string }>`
+        SELECT
+          name
+        FROM pragma_table_info ('harness_relationships')
+      `;
+      assert.isFalse(columns.some((column) => column.name === "structure"));
     }),
   );
 });

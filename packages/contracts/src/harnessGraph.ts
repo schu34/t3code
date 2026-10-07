@@ -43,10 +43,6 @@ export type HarnessAgentKind = typeof HarnessAgentKind.Type;
 export const HarnessAgentStatus = Schema.Literals(["active", "paused", "completed", "failed"]);
 export type HarnessAgentStatus = typeof HarnessAgentStatus.Type;
 
-/** Structural edge used for graph layout; interaction behavior lives in its definition. */
-export const HarnessRelationshipStructure = Schema.Literals(["delegation", "sidechat"]);
-export type HarnessRelationshipStructure = typeof HarnessRelationshipStructure.Type;
-
 export const HarnessMessageAuthorKind = Schema.Literals(["user", "agent"]);
 export type HarnessMessageAuthorKind = typeof HarnessMessageAuthorKind.Type;
 /** Stable locator persisted with graph metadata, not a second agent runtime. */
@@ -104,7 +100,6 @@ export const HarnessRelationship = Schema.Struct({
   relationshipId: HarnessRelationshipId,
   sourceAgentId: HarnessAgentId,
   targetAgentId: HarnessAgentId,
-  structure: HarnessRelationshipStructure,
   relationshipDefinitionId: HarnessRelationshipDefinitionId,
   topic: Schema.optional(TrimmedNonEmptyString),
   forkedFromTurnId: Schema.optional(TurnId),
@@ -200,7 +195,6 @@ export const HarnessUpsertRelationshipInput = Schema.Struct({
   relationshipId: Schema.optional(HarnessRelationshipId),
   sourceAgentId: HarnessAgentId,
   targetAgentId: HarnessAgentId,
-  structure: HarnessRelationshipStructure,
   relationshipDefinitionId: HarnessRelationshipDefinitionId,
   topic: Schema.optional(TrimmedNonEmptyString),
   forkedFromTurnId: Schema.optional(TurnId),
