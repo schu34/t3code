@@ -296,7 +296,6 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
             relationship_id,
             source_agent_id,
             target_agent_id,
-            structure,
             relationship_definition_id,
             topic,
             created_at
@@ -305,7 +304,6 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
             ${`native-delegation:${id}`},
             ${creator},
             ${id},
-            'delegation',
             'builtin:delegation',
             'Provider native subagent',
             ${o.observedAt}
