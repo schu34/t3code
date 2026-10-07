@@ -29,7 +29,7 @@ function agent(id: string, patch: Partial<HarnessCanvasAgent> = {}): HarnessCanv
     kind: "root",
     parentAgentId: null,
     environmentId: "env" as never,
-    threadId: id as never,
+    backing: { kind: "thread", threadId: id as never },
     projectId: "project" as never,
     title: id,
     projectTitle: "Project",

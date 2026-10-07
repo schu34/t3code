@@ -17,6 +17,7 @@ import {
   type HarnessCanvasAgent,
   type HarnessCanvasSnapshot,
 } from "../harnessCanvas.logic";
+import { useRightPanelStore } from "../rightPanelStore";
 import {
   harnessGraphRead,
   harnessGraphSetAgent,
@@ -28,6 +29,19 @@ import { useProjects, useThreadShells } from "../state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
+
+type GraphAgent = HarnessGraphSnapshot["agents"][number];
+
+/** Native children nest under each other; their transcripts live in the top-level thread. */
+function ownerThreadId(agent: GraphAgent, byThreadId: ReadonlyMap<string, GraphAgent>): ThreadId {
+  let current = agent;
+  while (current.native !== undefined && current.parentThreadId !== undefined) {
+    const parent = byThreadId.get(current.parentThreadId);
+    if (parent === undefined) return current.parentThreadId;
+    current = parent;
+  }
+  return current.threadId;
+}
 
 function buildSnapshot(
   environmentId: EnvironmentId,
@@ -43,9 +57,49 @@ function buildSnapshot(
   );
   if (graph === null) return base;
 
-  const byThreadId = new Map(graph.agents.map((agent) => [agent.threadId, agent]));
-  const agentsWithProvenance = base.agents.map((agent) => {
-    const metadata = byThreadId.get(agent.threadId);
+  const byThreadId = new Map<string, GraphAgent>(graph.agents.map((a) => [a.threadId, a]));
+  const nativeAgents = graph.agents.flatMap((serverAgent) => {
+    const native = serverAgent.native;
+    if (native === undefined) return [];
+    const project = projects.find(
+      (p) => p.environmentId === environmentId && p.id === serverAgent.projectId,
+    );
+    return [
+      {
+        id: harnessAgentId(environmentId, serverAgent.threadId),
+        kind: "delegated" as const,
+        parentAgentId: null,
+        environmentId,
+        backing: {
+          kind: "native" as const,
+          threadId: serverAgent.threadId,
+          provider: native.provider,
+          providerAgentId: native.providerAgentId,
+          ownerThreadId: ownerThreadId(serverAgent, byThreadId),
+        },
+        projectId: serverAgent.projectId,
+        title: serverAgent.displayName,
+        projectTitle: project?.title ?? "Unknown project",
+        activity: `Native ${native.provider} subagent`,
+        runtimeState:
+          serverAgent.status === "failed"
+            ? ("failed" as const)
+            : serverAgent.status === "completed"
+              ? ("stopped" as const)
+              : serverAgent.status === "paused"
+                ? ("waiting" as const)
+                : ("working" as const),
+        deliveryStage: "implementing" as const,
+        archived: false,
+        completed: serverAgent.status === "completed",
+        unreadCount: 0,
+        position: null,
+        latestCompletedTurnId: null,
+      } satisfies HarnessCanvasAgent,
+    ];
+  });
+  const agentsWithProvenance = [...base.agents, ...nativeAgents].map((agent) => {
+    const metadata = byThreadId.get(agent.backing.threadId);
     const parentThreadId = metadata?.parentThreadId;
     return {
       ...agent,
@@ -111,7 +165,7 @@ export default function HarnessWorkspace() {
 
   const threadIdFor = useCallback(
     (localId: string): ThreadId | null =>
-      snapshot.agents.find((agent) => agent.id === localId)?.threadId ?? null,
+      snapshot.agents.find((agent) => agent.id === localId)?.backing.threadId ?? null,
     [snapshot.agents],
   );
   const run = useCallback(
@@ -184,12 +238,12 @@ export default function HarnessWorkspace() {
       forkedFromTurnId?: TurnId,
     ): Promise<void> => {
       const parent = snapshot.agents.find((agent) => agent.id === agentId);
-      if (parent === undefined) return;
+      if (parent === undefined || parent.backing.kind !== "thread") return;
       const result = await createGraphThread(parent.projectId, title);
       if (result === null) return;
       await run(setAgent, {
         threadId: result.threadId,
-        parentThreadId: parent.threadId,
+        parentThreadId: parent.backing.threadId,
         ...(forkedFromTurnId === undefined ? {} : { forkedFromTurnId }),
       });
     };
@@ -229,9 +283,16 @@ export default function HarnessWorkspace() {
         });
         return;
       }
+      const nativeBacking = agent.backing.kind === "native" ? agent.backing : undefined;
+      const threadId = nativeBacking?.ownerThreadId ?? agent.backing.threadId;
+      if (nativeBacking !== undefined) {
+        useRightPanelStore
+          .getState()
+          .openAgents(scopeThreadRef(agent.environmentId, threadId), nativeBacking.providerAgentId);
+      }
       void navigate({
         to: "/$environmentId/$threadId",
-        params: { environmentId: agent.environmentId, threadId: agent.threadId },
+        params: { environmentId: agent.environmentId, threadId },
       });
     },
     [navigate],

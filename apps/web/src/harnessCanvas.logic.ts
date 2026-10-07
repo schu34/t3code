@@ -45,6 +45,20 @@ export interface HarnessCanvasPosition {
   readonly y: number;
 }
 
+export type HarnessCanvasAgentBacking =
+  | {
+      readonly kind: "thread";
+      readonly threadId: ThreadId;
+    }
+  | {
+      /** Inspect-only provider child, shown in its owner thread's Agents panel. */
+      readonly kind: "native";
+      readonly threadId: ThreadId;
+      readonly provider: string;
+      readonly providerAgentId: string;
+      readonly ownerThreadId: ThreadId;
+    };
+
 export interface HarnessCanvasLayoutOptions {
   readonly columnWidth?: number;
   readonly rowHeight?: number;
@@ -58,7 +72,7 @@ export interface HarnessCanvasAgent {
   /** Creator's canvas ID, independent of communication edges. */
   readonly parentAgentId: string | null;
   readonly environmentId: EnvironmentId;
-  readonly threadId: ThreadId;
+  readonly backing: HarnessCanvasAgentBacking;
   readonly draftId?: string;
   readonly projectId: ProjectId;
   readonly title: string;
@@ -410,7 +424,7 @@ export function buildHarnessCanvasSnapshotFromThreads(
       kind: "root" as const,
       parentAgentId: null,
       environmentId: thread.environmentId,
-      threadId: thread.id,
+      backing: { kind: "thread" as const, threadId: thread.id },
       projectId: thread.projectId,
       title: thread.title,
       projectTitle: project?.title ?? "Unknown project",
