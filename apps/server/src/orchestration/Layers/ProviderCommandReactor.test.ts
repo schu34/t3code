@@ -625,6 +625,36 @@ describe("ProviderCommandReactor", () => {
       generateBranchName,
       generateThreadTitle,
       runtimeSessions,
+      seedHarnessRole: () =>
+        runtime!.runPromise(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            yield* sql`
+              INSERT INTO harness_roles (
+                role_id,
+                name,
+                instructions,
+                created_at
+              )
+              VALUES (
+                'role-implementor',
+                'Implementor',
+                'Make small, tested changes.',
+                '2026-01-01T00:00:00.000Z'
+              )
+            `;
+            yield* sql`
+              INSERT INTO harness_agents (
+                thread_id,
+                role_id
+              )
+              VALUES (
+                'thread-1',
+                'role-implementor'
+              )
+            `;
+          }),
+        ),
       stateDir,
       drain,
       startReactor,
@@ -887,6 +917,45 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.status).toBe("starting");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("applies the thread's Harness role to the provider request", async () => {
+    const harness = await createHarness();
+    await harness.seedHarnessRole();
+    const sent = Effect.runSync(Deferred.make<void>());
+    harness.sendTurn.mockImplementation((_request: unknown) =>
+      Deferred.succeed(sent, undefined).pipe(
+        Effect.as({
+          threadId: ThreadId.make("thread-1"),
+          turnId: asTurnId("turn-1"),
+        }),
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-harness-role"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-harness-role"),
+          role: "user",
+          text: "Review this implementation",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    await Effect.runPromise(Deferred.await(sent));
+    await harness.drain();
+    const providerRequest = harness.sendTurn.mock.calls[0]?.[0] as
+      | { readonly input?: string }
+      | undefined;
+    expect(providerRequest?.input).toContain("### Role: Implementor\nMake small, tested changes.");
+    expect(providerRequest?.input).toContain("### User request\n\nReview this implementation");
   });
 
   effectIt.effect("projects inline context before sending the provider turn", () =>

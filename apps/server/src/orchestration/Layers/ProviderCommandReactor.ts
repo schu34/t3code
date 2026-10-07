@@ -31,6 +31,7 @@ import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
@@ -64,6 +65,7 @@ import {
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { applyHarnessRolePrompt } from "../../harnessGraphPrompt.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
 const isProviderWorkspaceMissingError = Schema.is(ProviderWorkspaceMissingError);
@@ -209,6 +211,7 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
 
 const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
+  const sql = yield* SqlClient.SqlClient;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerAuthService = yield* ProviderAuthService;
@@ -262,6 +265,22 @@ const make = Effect.gen(function* () {
     }
   >();
   const stoppingThreadIds = new Set<ThreadId>();
+
+  const harnessRoleForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const rows = yield* sql<{
+      readonly name: string;
+      readonly instructions: string;
+    }>`
+      SELECT
+        r.name,
+        r.instructions
+      FROM harness_agents a
+      JOIN harness_roles r
+        ON r.role_id = a.role_id
+      WHERE a.thread_id = ${threadId}
+    `;
+    return rows[0];
+  });
 
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -838,7 +857,10 @@ const make = Effect.gen(function* () {
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
-    const normalizedInput = toNonEmptyProviderInput(input.messageText);
+    const role = yield* harnessRoleForThread(input.threadId);
+    const normalizedInput = toNonEmptyProviderInput(
+      applyHarnessRolePrompt(input.messageText, role),
+    );
     const normalizedAttachments = input.attachments ?? [];
     const activeSession = yield* providerService
       .listSessions()
