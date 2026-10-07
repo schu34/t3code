@@ -275,7 +275,9 @@ const make = Effect.gen(function* () {
       readonly name: string;
       readonly instructions: string;
     }>`
-      SELECT d.name, d.instructions
+      SELECT
+        d.name,
+        d.instructions
       FROM harness_agents a
       JOIN harness_role_definitions d
         ON d.role_definition_id = a.role_definition_id
@@ -298,15 +300,19 @@ const make = Effect.gen(function* () {
       FROM harness_agents a
       JOIN harness_relationships r
         ON r.source_agent_id = a.agent_id OR r.target_agent_id = a.agent_id
-      JOIN harness_channels c ON c.relationship_id = r.relationship_id
-      JOIN harness_coordination_messages m ON m.channel_id = c.channel_id
+      JOIN harness_channels c
+        ON c.relationship_id = r.relationship_id
+      JOIN harness_coordination_messages m
+        ON m.channel_id = c.channel_id
       JOIN harness_relationship_definitions d
         ON d.relationship_definition_id = r.relationship_definition_id
       WHERE a.thread_id = ${threadId}
         AND a.backing_kind = 'thread'
         AND m.message_id = ${messageId}
         AND (m.sender_agent_id = a.agent_id OR m.recipient_agent_id = a.agent_id)
-      ORDER BY r.created_at, r.relationship_id
+      ORDER BY
+        r.created_at,
+        r.relationship_id
     `;
     return {
       role,

@@ -632,46 +632,132 @@ describe("ProviderCommandReactor", () => {
             const now = "2026-01-01T00:00:00.000Z";
             yield* sql`
               INSERT INTO harness_role_definitions (
-                role_definition_id, name, instructions, created_at, updated_at
-              ) VALUES ('role-implementor', 'Implementor',
-                'Make small, tested changes.', ${now}, ${now})
+                role_definition_id,
+                name,
+                instructions,
+                created_at,
+                updated_at
+              )
+              VALUES (
+                'role-implementor',
+                'Implementor',
+                'Make small, tested changes.',
+                ${now},
+                ${now}
+              )
             `;
             yield* sql`
               INSERT INTO harness_role_definitions (
-                role_definition_id, name, instructions, created_at, updated_at
-              ) VALUES ('role-reviewer', 'Reviewer',
-                'Review carefully.', ${now}, ${now})
+                role_definition_id,
+                name,
+                instructions,
+                created_at,
+                updated_at
+              )
+              VALUES (
+                'role-reviewer',
+                'Reviewer',
+                'Review carefully.',
+                ${now},
+                ${now}
+              )
             `;
             yield* sql`
               INSERT INTO harness_relationship_definitions (
-                relationship_definition_id, name,
-                request_instructions, response_instructions, created_at, updated_at
-              ) VALUES ('rel-review', 'Code review',
+                relationship_definition_id,
+                name,
+                request_instructions,
+                response_instructions,
+                created_at,
+                updated_at
+              )
+              VALUES (
+                'rel-review',
+                'Code review',
                 'Include the tradeoffs in the review request.',
-                'Identify correctness risks and missing tests.', ${now}, ${now})
+                'Identify correctness risks and missing tests.',
+                ${now},
+                ${now}
+              )
             `;
             yield* sql`
               INSERT INTO harness_agents (
-                agent_id, thread_id, kind, role_definition_id, created_at, updated_at
-              ) VALUES ('agent-implementor', 'thread-1', 'root', 'role-implementor', ${now}, ${now})
+                agent_id,
+                thread_id,
+                kind,
+                role_definition_id,
+                created_at,
+                updated_at
+              )
+              VALUES (
+                'agent-implementor',
+                'thread-1',
+                'root',
+                'role-implementor',
+                ${now},
+                ${now}
+              )
             `;
             yield* sql`
               INSERT INTO harness_agents (
-                agent_id, thread_id, kind, role_definition_id, created_at, updated_at
-              ) VALUES ('agent-reviewer', 'thread-reviewer', 'delegated', 'role-reviewer', ${now}, ${now})
+                agent_id,
+                thread_id,
+                kind,
+                role_definition_id,
+                created_at,
+                updated_at
+              )
+              VALUES (
+                'agent-reviewer',
+                'thread-reviewer',
+                'delegated',
+                'role-reviewer',
+                ${now},
+                ${now}
+              )
             `;
             yield* sql`
               INSERT INTO harness_relationships (
-                relationship_id, source_agent_id, target_agent_id, structure,
-                relationship_definition_id, created_at
-              ) VALUES ('relationship-review', 'agent-implementor', 'agent-reviewer',
-                'delegation', 'rel-review', ${now})
+                relationship_id,
+                source_agent_id,
+                target_agent_id,
+                structure,
+                relationship_definition_id,
+                created_at
+              )
+              VALUES (
+                'relationship-review',
+                'agent-implementor',
+                'agent-reviewer',
+                'delegation',
+                'rel-review',
+                ${now}
+              )
             `;
             if (channelMessage) {
-              yield* sql`INSERT INTO harness_channels VALUES ('review-channel', 'relationship-review', 'Review', ${now})`;
-              yield* sql`INSERT INTO harness_coordination_messages VALUES
-                ('user-message-harness-behavior', 'review-channel', 'agent-implementor', 'agent-reviewer',
-                  'user', 'Review this implementation', 1, 'request-1', ${now})`;
+              yield* sql`
+                INSERT INTO harness_channels
+                VALUES (
+                  'review-channel',
+                  'relationship-review',
+                  'Review',
+                  ${now}
+                )
+              `;
+              yield* sql`
+                INSERT INTO harness_coordination_messages
+                VALUES (
+                  'user-message-harness-behavior',
+                  'review-channel',
+                  'agent-implementor',
+                  'agent-reviewer',
+                  'user',
+                  'Review this implementation',
+                  1,
+                  'request-1',
+                  ${now}
+                )
+              `;
             }
           }),
         ),
