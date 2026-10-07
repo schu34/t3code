@@ -7,6 +7,7 @@ import {
   HarnessSendCoordinationMessageInput,
 } from "./harnessGraph.ts";
 const decodeAgent = Schema.decodeUnknownSync(HarnessAgent);
+const decodeMetadata = Schema.decodeUnknownSync(HarnessAgentMetadata);
 const decodeRelationship = Schema.decodeUnknownSync(HarnessCreateRelationshipDefinitionInput);
 const decodeSend = Schema.decodeUnknownSync(HarnessSendCoordinationMessageInput);
 describe("Harness MVP contracts", () => {
@@ -27,7 +28,7 @@ describe("Harness MVP contracts", () => {
     ).toEqual({ kind: "thread", threadId: "thread-1" });
   });
   it("accepts graph metadata without copying backing presentation or lifecycle", () => {
-    const metadata = Schema.decodeUnknownSync(HarnessAgentMetadata)({
+    const metadata = decodeMetadata({
       agentId: "agent-1",
       backing: { kind: "thread", threadId: "thread-1" },
       kind: "delegated",
