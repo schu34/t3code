@@ -721,7 +721,6 @@ describe("ProviderCommandReactor", () => {
                 relationship_id,
                 source_agent_id,
                 target_agent_id,
-                structure,
                 relationship_definition_id,
                 created_at
               )
@@ -729,7 +728,6 @@ describe("ProviderCommandReactor", () => {
                 'relationship-review',
                 'agent-implementor',
                 'agent-reviewer',
-                'delegation',
                 'rel-review',
                 ${now}
               )
