@@ -15,22 +15,51 @@ layer("055_HarnessGraph", (it) => {
       yield* runMigrations({ toMigrationInclusive: 55 });
       const timestamp = "2026-10-04T00:00:00.000Z";
       yield* sql`
-        INSERT INTO harness_role_definitions
-          (role_definition_id, name, instructions, created_at, updated_at)
-        VALUES ('shared-role', 'Implementor', 'Implement changes.', ${timestamp}, ${timestamp})
+        INSERT INTO harness_role_definitions (
+          role_definition_id,
+          name,
+          instructions,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          'shared-role',
+          'Implementor',
+          'Implement changes.',
+          ${timestamp},
+          ${timestamp}
+        )
       `;
       for (const projectId of ["project-a", "project-b"]) {
         yield* sql`
-          INSERT INTO harness_agents
-            (agent_id, thread_id, kind, role_definition_id, created_at, updated_at)
-          VALUES ( ${projectId}, ${projectId}, 'root', 'shared-role', ${timestamp}, ${timestamp})
+          INSERT INTO harness_agents (
+            agent_id,
+            thread_id,
+            kind,
+            role_definition_id,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            ${projectId},
+            ${projectId},
+            'root',
+            'shared-role',
+            ${timestamp},
+            ${timestamp}
+          )
         `;
       }
       const agents = yield* sql<{
         readonly thread_id: string;
         readonly role_definition_id: string;
       }>`
-        SELECT thread_id, role_definition_id FROM harness_agents ORDER BY thread_id
+        SELECT
+          thread_id,
+          role_definition_id
+        FROM harness_agents
+        ORDER BY
+          thread_id
       `;
       assert.deepStrictEqual(agents, [
         { thread_id: "project-a", role_definition_id: "shared-role" },
@@ -39,7 +68,11 @@ layer("055_HarnessGraph", (it) => {
       for (const table of ["harness_role_definitions", "harness_relationship_definitions"]) {
         const columns = yield* sql<{
           readonly name: string;
-        }>`SELECT name FROM pragma_table_info(${table})`;
+        }>`
+          SELECT
+            name
+          FROM pragma_table_info (${table})
+        `;
         assert.isFalse(columns.some((column) => column.name === "thread_id"));
       }
     }),
@@ -51,12 +84,19 @@ layer("055_HarnessGraph", (it) => {
       yield* runMigrations({ toMigrationInclusive: 55 });
 
       const tables = yield* sql<{ readonly name: string }>`
-        SELECT name FROM sqlite_master
-        WHERE type = 'table' AND name LIKE 'harness_%'
-        ORDER BY name
+        SELECT
+          name
+        FROM sqlite_master
+        WHERE type = 'table'
+        AND name LIKE 'harness_%'
+        ORDER BY
+          name
       `;
       const migration = yield* sql<{ readonly migration_id: number }>`
-        SELECT migration_id FROM effect_sql_migrations WHERE migration_id = 55
+        SELECT
+          migration_id
+        FROM effect_sql_migrations
+        WHERE migration_id = 55
       `;
 
       assert.deepStrictEqual(
