@@ -4,7 +4,6 @@ import {
   CommandId,
   EventId,
   type ModelSelection,
-  type MessageId,
   type OrchestrationEvent,
   ProviderDriverKind,
   type ProjectId,
@@ -66,7 +65,7 @@ import {
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
-import { applyHarnessPromptBehavior } from "../../harnessGraphPrompt.ts";
+import { applyHarnessRolePrompt } from "../../harnessGraphPrompt.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
 const isProviderWorkspaceMissingError = Schema.is(ProviderWorkspaceMissingError);
@@ -267,57 +266,20 @@ const make = Effect.gen(function* () {
   >();
   const stoppingThreadIds = new Set<ThreadId>();
 
-  const harnessPromptBehaviorForThread = Effect.fnUntraced(function* (
-    threadId: ThreadId,
-    messageId: MessageId,
-  ) {
-    const roleRows = yield* sql<{
+  const harnessRoleForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const rows = yield* sql<{
       readonly name: string;
       readonly instructions: string;
     }>`
       SELECT
-        d.name,
-        d.instructions
+        r.name,
+        r.instructions
       FROM harness_agents a
-      JOIN harness_role_definitions d
-        ON d.role_definition_id = a.role_definition_id
+      JOIN harness_roles r
+        ON r.role_id = a.role_id
       WHERE a.thread_id = ${threadId}
-        AND a.backing_kind = 'thread'
-      LIMIT 1
     `;
-    const role = roleRows[0];
-    if (role === undefined) return { relationships: [] };
-    const relationshipRows = yield* sql<{
-      readonly name: string;
-      readonly direction: "requester" | "responder";
-      readonly instructions: string;
-    }>`
-      SELECT
-        d.name,
-        CASE WHEN r.source_agent_id = a.agent_id THEN 'requester' ELSE 'responder' END AS direction,
-        CASE WHEN r.source_agent_id = a.agent_id
-          THEN d.request_instructions ELSE d.response_instructions END AS instructions
-      FROM harness_agents a
-      JOIN harness_relationships r
-        ON r.source_agent_id = a.agent_id OR r.target_agent_id = a.agent_id
-      JOIN harness_channels c
-        ON c.relationship_id = r.relationship_id
-      JOIN harness_coordination_messages m
-        ON m.channel_id = c.channel_id
-      JOIN harness_relationship_definitions d
-        ON d.relationship_definition_id = r.relationship_definition_id
-      WHERE a.thread_id = ${threadId}
-        AND a.backing_kind = 'thread'
-        AND m.message_id = ${messageId}
-        AND (m.sender_agent_id = a.agent_id OR m.recipient_agent_id = a.agent_id)
-      ORDER BY
-        r.created_at,
-        r.relationship_id
-    `;
-    return {
-      role,
-      relationships: relationshipRows,
-    };
+    return rows[0];
   });
 
   const appendProviderFailureActivity = (input: {
@@ -876,7 +838,6 @@ const make = Effect.gen(function* () {
 
   const buildSendTurnRequestForThread = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
-    readonly messageId: MessageId;
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly modelSelection?: ModelSelection;
@@ -896,9 +857,9 @@ const make = Effect.gen(function* () {
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
-    const behavior = yield* harnessPromptBehaviorForThread(input.threadId, input.messageId);
+    const role = yield* harnessRoleForThread(input.threadId);
     const normalizedInput = toNonEmptyProviderInput(
-      applyHarnessPromptBehavior(input.messageText, behavior),
+      applyHarnessRolePrompt(input.messageText, role),
     );
     const normalizedAttachments = input.attachments ?? [];
     const activeSession = yield* providerService
@@ -1533,7 +1494,6 @@ const make = Effect.gen(function* () {
     }
     const sendTurnRequest = yield* buildSendTurnRequestForThread({
       threadId: event.payload.threadId,
-      messageId: event.payload.messageId,
       messageText: projectComposerContextForProvider({
         text: message.text,
         records: message.context?.records ?? [],

@@ -38,14 +38,12 @@ import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
 import { PullRequestGlyph } from "./pullRequest/pullRequestIcons";
 const GitPullRequestIcon = PullRequestGlyph.pullRequest;
-const NO_RELATIONSHIPS: NonNullable<HarnessCanvasProps["relationshipDefinitions"]> = [];
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { cn } from "~/lib/utils";
 import {
   type HarnessCanvasActions,
   type HarnessCanvasAgent,
-  type HarnessCanvasChannel,
   type HarnessCanvasEdge,
   type HarnessCanvasPosition,
   type HarnessCanvasSnapshot,
@@ -57,7 +55,6 @@ import {
 
 export interface HarnessCanvasProps {
   readonly snapshot: HarnessCanvasSnapshot;
-  readonly relationshipDefinitions?: ReadonlyArray<{ readonly id: string; readonly name: string }>;
   readonly actions: HarnessCanvasActions | null;
   readonly onSelectAgent: (agent: HarnessCanvasAgent) => void;
   readonly onEditDefinitions?: () => void;
@@ -332,7 +329,7 @@ function makeFlowEdges(edges: ReadonlyArray<HarnessCanvasEdge>): Edge[] {
     labelStyle: { fill: "var(--muted-foreground)", fontSize: 10, fontWeight: 500 },
     labelBgStyle: { fill: "var(--background)", fillOpacity: 0.92 },
     markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 },
-    data: { kind: edge.kind, channelId: edge.channelId },
+    data: { kind: edge.kind },
     ...edgeStyle(edge.kind),
   }));
 }
@@ -424,133 +421,17 @@ function ConnectionSelector({
   );
 }
 
-function ChannelPanel({
-  channel,
-  source,
-  target,
-  actions,
-  onClose,
-}: {
-  readonly channel: HarnessCanvasChannel;
-  readonly source: HarnessCanvasAgent | undefined;
-  readonly target: HarnessCanvasAgent | undefined;
-  readonly actions: HarnessCanvasActions | null;
-  readonly onClose: () => void;
-}) {
-  const [draft, setDraft] = useState("");
-  const [isSending, setIsSending] = useState(false);
-  const sendUpdate = async () => {
-    const body = draft.trim();
-    if (body.length === 0 || actions === null) return;
-    setIsSending(true);
-    try {
-      await actions.sendCoordination(channel.id, body);
-      setDraft("");
-    } finally {
-      setIsSending(false);
-    }
-  };
-  return (
-    <aside
-      className="absolute inset-y-0 right-0 z-30 flex w-[min(380px,calc(100%-1rem))] flex-col border-l border-border/75 bg-background/96 shadow-2xl backdrop-blur-md"
-      aria-label={`Channel between ${source?.title ?? "agent"} and ${target?.title ?? "agent"}`}
-      data-harness-channel-panel="true"
-    >
-      <div className="flex items-start justify-between gap-3 border-b border-border/70 px-4 py-3">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold">
-            {source?.title ?? "Agent"} ↔ {target?.title ?? "Agent"}
-          </p>
-          <p className="mt-0.5 truncate text-xs text-muted-foreground">{channel.topic}</p>
-        </div>
-        <Button size="icon-sm" variant="ghost" aria-label="Close channel details" onClick={onClose}>
-          <XIcon aria-hidden="true" />
-        </Button>
-      </div>
-      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
-        <section aria-labelledby="harness-channel-transcript-heading">
-          <h3
-            id="harness-channel-transcript-heading"
-            className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-          >
-            Transcript
-          </h3>
-          <div className="space-y-2">
-            {channel.transcript.length === 0 ? (
-              <p className="rounded-lg border border-dashed border-border/75 px-3 py-4 text-xs text-muted-foreground">
-                No messages have been exchanged yet.
-              </p>
-            ) : (
-              channel.transcript.map((message) => (
-                <div
-                  key={message.id}
-                  className="rounded-lg border border-border/60 bg-card/60 p-2.5"
-                >
-                  <p className="mb-1 text-[11px] font-medium text-muted-foreground">
-                    {message.authorAgentId === channel.sourceAgentId
-                      ? source?.title
-                      : target?.title}
-                  </p>
-                  <p className="whitespace-pre-wrap text-xs leading-relaxed">{message.text}</p>
-                </div>
-              ))
-            )}
-          </div>
-        </section>
-
-        <section aria-labelledby="harness-channel-message-heading">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <h3
-              id="harness-channel-message-heading"
-              className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-            >
-              Send coordination update
-            </h3>
-            <span className="text-[11px] text-muted-foreground">
-              {channel.messageCount} exchanged
-            </span>
-          </div>
-          <textarea
-            className="min-h-20 w-full resize-y rounded-lg border border-input bg-background px-3 py-2 text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            placeholder="Share context, a test result, or a decision…"
-            aria-label="Coordination update"
-            disabled={actions === null || isSending}
-          />
-          <Button
-            className="mt-2"
-            size="sm"
-            variant="default"
-            disabled={actions === null || draft.trim().length === 0 || isSending}
-            onClick={() => void sendUpdate()}
-          >
-            <MessageCircleIcon aria-hidden="true" />
-            {isSending ? "Sending…" : "Send update"}
-          </Button>
-        </section>
-      </div>
-    </aside>
-  );
-}
-
 function HarnessCanvasInner({
   snapshot,
   actions,
   onSelectAgent,
   onEditDefinitions,
   selectedAgentId = null,
-  relationshipDefinitions = NO_RELATIONSHIPS,
   className,
 }: HarnessCanvasProps) {
-  const [relationshipDefinitionId, setRelationshipDefinitionId] = useState("");
   const [showArchivedCompleted, setShowArchivedCompleted] = useState(true);
   const [collapsedAgentIds, setCollapsedAgentIds] = useState<ReadonlySet<string>>(new Set());
   const [showDetails, setShowDetails] = useState(false);
-  const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
-  const [selectedChannelDetail, setSelectedChannelDetail] = useState<HarnessCanvasChannel | null>(
-    null,
-  );
   const [localPositions, setLocalPositions] = useState<ReadonlyMap<string, HarnessCanvasPosition>>(
     new Map(),
   );
@@ -634,16 +515,15 @@ function HarnessCanvasInner({
     (connection: Connection) => {
       if (
         !actions ||
-        !relationshipDefinitionId ||
         !connection.source ||
         !connection.target ||
         connection.source === connection.target
       ) {
         return;
       }
-      void actions.connect(connection.source, connection.target, relationshipDefinitionId);
+      void actions.connect(connection.source, connection.target);
     },
-    [actions, relationshipDefinitionId],
+    [actions],
   );
 
   const onNodeDragStop = useCallback(
@@ -657,44 +537,6 @@ function HarnessCanvasInner({
     [],
   );
 
-  useEffect(() => {
-    let cancelled = false;
-    const summary = selectedChannelId
-      ? (visibleSnapshot.channels.find((channel) => channel.id === selectedChannelId) ?? null)
-      : null;
-    if (selectedChannelId === null || actions === null || summary === null) {
-      return () => {
-        cancelled = true;
-      };
-    }
-    void actions
-      .loadChannel(selectedChannelId)
-      .then((detail) => {
-        if (!cancelled && detail !== null) setSelectedChannelDetail(detail);
-      })
-      .catch(() => {
-        // The lightweight summary remains usable when a detail read is unavailable.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [actions, selectedChannelId, visibleSnapshot.channels]);
-
-  const selectedChannelSummary = selectedChannelId
-    ? (visibleSnapshot.channels.find((channel) => channel.id === selectedChannelId) ?? null)
-    : null;
-  const selectedChannel =
-    selectedChannelSummary === null
-      ? null
-      : selectedChannelDetail?.id === selectedChannelSummary.id
-        ? selectedChannelDetail
-        : selectedChannelSummary;
-  const selectedChannelSource = selectedChannel
-    ? visibleSnapshot.agents.find((agent) => agent.id === selectedChannel.sourceAgentId)
-    : undefined;
-  const selectedChannelTarget = selectedChannel
-    ? visibleSnapshot.agents.find((agent) => agent.id === selectedChannel.targetAgentId)
-    : undefined;
   const renderedNodes = useMemo(
     () => selectHarnessCanvasNodeSelection(nodes, selectedAgentId),
     [nodes, selectedAgentId],
@@ -714,15 +556,6 @@ function HarnessCanvasInner({
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         onNodeDragStop={onNodeDragStop}
-        onEdgeClick={(_event, edge) => {
-          const channelId = (edge.data as { channelId?: string | null } | undefined)?.channelId;
-          if (channelId) {
-            setSelectedChannelDetail(
-              visibleSnapshot.channels.find((channel) => channel.id === channelId) ?? null,
-            );
-            setSelectedChannelId(channelId);
-          }
-        }}
         nodeTypes={nodeTypes}
         fitView
         fitViewOptions={{ padding: 0.2, minZoom: 0.35, maxZoom: 1.15 }}
@@ -765,10 +598,10 @@ function HarnessCanvasInner({
               size="xs"
               variant="ghost"
               onClick={onEditDefinitions}
-              aria-label="Edit Harness roles and relationships"
+              aria-label="Edit Harness roles"
             >
               <Settings2Icon aria-hidden="true" />
-              Roles & relationships
+              Roles
             </Button>
             <Button
               size="xs"
@@ -834,25 +667,12 @@ function HarnessCanvasInner({
               <Link2Icon className="size-3.5" aria-hidden="true" />
               Connect agents
             </span>
-            <select
-              aria-label="Relationship behavior"
-              value={relationshipDefinitionId}
-              onChange={(event) => setRelationshipDefinitionId(event.target.value)}
-              className="h-7 rounded-md border border-input bg-background px-2 text-xs"
-            >
-              <option value="">Choose relationship…</option>
-              {relationshipDefinitions.map((definition) => (
-                <option key={definition.id} value={definition.id}>
-                  {definition.name}
-                </option>
-              ))}
-            </select>
             <ConnectionSelector
               agents={visibleSnapshot.agents}
               onConnect={(source, target) => {
-                if (actions) void actions.connect(source, target, relationshipDefinitionId);
+                if (actions) void actions.connect(source, target);
               }}
-              disabled={actions === null || !relationshipDefinitionId}
+              disabled={actions === null}
             />
           </div>
         </Panel>
@@ -872,23 +692,9 @@ function HarnessCanvasInner({
         </Panel>
       </ReactFlow>
 
-      {selectedChannel ? (
-        <ChannelPanel
-          channel={selectedChannel}
-          source={selectedChannelSource}
-          target={selectedChannelTarget}
-          actions={actions}
-          onClose={() => {
-            setSelectedChannelId(null);
-            setSelectedChannelDetail(null);
-          }}
-        />
-      ) : null}
-
-      {showDetails && !selectedChannel ? (
+      {showDetails ? (
         <div className="absolute bottom-4 right-4 z-20 max-w-xs rounded-lg border border-border/70 bg-background/95 p-3 text-xs text-muted-foreground shadow-lg backdrop-blur">
-          Select an agent to open its full chat controls. Select a labeled connection to inspect its
-          transcript.
+          Select an agent to open its full chat controls.
           <Button
             size="icon-micro"
             variant="ghost"

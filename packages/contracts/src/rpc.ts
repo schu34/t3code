@@ -272,21 +272,12 @@ import {
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
 import {
-  HarnessAgent,
-  HarnessChannel,
-  HarnessCreateRelationshipDefinitionInput,
-  HarnessCreateRoleDefinitionInput,
-  HarnessGetChannelInput,
+  HarnessCreateRoleInput,
   HarnessGraphError,
   HarnessGraphReadInput,
   HarnessGraphSnapshot,
-  HarnessGraphStreamEvent,
-  HarnessOpenChannelInput,
-  HarnessRegisterAgentInput,
-  HarnessRelationshipDefinition,
-  HarnessRoleDefinition,
-  HarnessSendCoordinationMessageInput,
-  HarnessUpsertRelationshipInput,
+  HarnessSetAgentInput,
+  HarnessUpsertEdgeInput,
 } from "./harnessGraph.ts";
 
 export const WS_METHODS = {
@@ -458,16 +449,12 @@ export const WS_METHODS = {
   subscribeBackgroundPolicy: "subscribeBackgroundPolicy",
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
 
-  // Harness graph and coordination methods
+  // Harness graph methods
   harnessGraphRead: "harnessGraph.read",
   harnessGraphSubscribe: "harnessGraph.subscribe",
-  harnessGraphGetChannel: "harnessGraph.getChannel",
-  harnessGraphCreateRoleDefinition: "harnessGraph.createRoleDefinition",
-  harnessGraphCreateRelationshipDefinition: "harnessGraph.createRelationshipDefinition",
-  harnessGraphRegisterAgent: "harnessGraph.registerAgent",
-  harnessGraphUpsertRelationship: "harnessGraph.upsertRelationship",
-  harnessGraphOpenChannel: "harnessGraph.openChannel",
-  harnessGraphSendCoordination: "harnessGraph.sendCoordination",
+  harnessGraphCreateRole: "harnessGraph.createRole",
+  harnessGraphSetAgent: "harnessGraph.setAgent",
+  harnessGraphUpsertEdge: "harnessGraph.upsertEdge",
 } as const;
 
 const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -1417,56 +1404,26 @@ const WsHarnessGraphReadRpc = Rpc.make(WS_METHODS.harnessGraphRead, {
 
 const WsHarnessGraphSubscribeRpc = Rpc.make(WS_METHODS.harnessGraphSubscribe, {
   payload: HarnessGraphReadInput,
-  success: HarnessGraphStreamEvent,
+  success: HarnessGraphSnapshot,
   error: HarnessGraphError,
   stream: true,
 });
 
-const WsHarnessGraphGetChannelRpc = Rpc.make(WS_METHODS.harnessGraphGetChannel, {
-  payload: HarnessGetChannelInput,
-  success: HarnessChannel,
+const WsHarnessGraphCreateRoleRpc = Rpc.make(WS_METHODS.harnessGraphCreateRole, {
+  payload: HarnessCreateRoleInput,
+  success: Schema.Void,
   error: HarnessGraphError,
 });
 
-const WsHarnessGraphRegisterAgentRpc = Rpc.make(WS_METHODS.harnessGraphRegisterAgent, {
-  payload: HarnessRegisterAgentInput,
-  success: HarnessAgent,
+const WsHarnessGraphSetAgentRpc = Rpc.make(WS_METHODS.harnessGraphSetAgent, {
+  payload: HarnessSetAgentInput,
+  success: Schema.Void,
   error: HarnessGraphError,
 });
 
-const WsHarnessGraphCreateRoleDefinitionRpc = Rpc.make(
-  WS_METHODS.harnessGraphCreateRoleDefinition,
-  {
-    payload: HarnessCreateRoleDefinitionInput,
-    success: HarnessRoleDefinition,
-    error: HarnessGraphError,
-  },
-);
-
-const WsHarnessGraphCreateRelationshipDefinitionRpc = Rpc.make(
-  WS_METHODS.harnessGraphCreateRelationshipDefinition,
-  {
-    payload: HarnessCreateRelationshipDefinitionInput,
-    success: HarnessRelationshipDefinition,
-    error: HarnessGraphError,
-  },
-);
-
-const WsHarnessGraphUpsertRelationshipRpc = Rpc.make(WS_METHODS.harnessGraphUpsertRelationship, {
-  payload: HarnessUpsertRelationshipInput,
-  success: HarnessGraphSnapshot,
-  error: HarnessGraphError,
-});
-
-const WsHarnessGraphOpenChannelRpc = Rpc.make(WS_METHODS.harnessGraphOpenChannel, {
-  payload: HarnessOpenChannelInput,
-  success: HarnessGraphSnapshot,
-  error: HarnessGraphError,
-});
-
-const WsHarnessGraphSendCoordinationRpc = Rpc.make(WS_METHODS.harnessGraphSendCoordination, {
-  payload: HarnessSendCoordinationMessageInput,
-  success: HarnessGraphSnapshot,
+const WsHarnessGraphUpsertEdgeRpc = Rpc.make(WS_METHODS.harnessGraphUpsertEdge, {
+  payload: HarnessUpsertEdgeInput,
+  success: Schema.Void,
   error: HarnessGraphError,
 });
 
@@ -1608,13 +1565,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeResourceTelemetryRpc,
   WsHarnessGraphReadRpc,
   WsHarnessGraphSubscribeRpc,
-  WsHarnessGraphGetChannelRpc,
-  WsHarnessGraphCreateRoleDefinitionRpc,
-  WsHarnessGraphCreateRelationshipDefinitionRpc,
-  WsHarnessGraphRegisterAgentRpc,
-  WsHarnessGraphUpsertRelationshipRpc,
-  WsHarnessGraphOpenChannelRpc,
-  WsHarnessGraphSendCoordinationRpc,
+  WsHarnessGraphCreateRoleRpc,
+  WsHarnessGraphSetAgentRpc,
+  WsHarnessGraphUpsertEdgeRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetWorkflowScriptRpc,
   WsOrchestrationGetTurnDiffRpc,

@@ -1,39 +1,20 @@
-export interface HarnessPromptRelationshipInstruction {
+import { PROVIDER_SEND_TURN_MAX_INPUT_CHARS } from "@t3tools/contracts";
+
+export interface HarnessPromptRole {
   readonly name: string;
-  readonly direction: "requester" | "responder";
   readonly instructions: string;
 }
 
-export interface HarnessPromptBehavior {
-  readonly role?: {
-    readonly name: string;
-    readonly instructions: string;
-  };
-  readonly relationships: ReadonlyArray<HarnessPromptRelationshipInstruction>;
-}
-
-/** Keep behavior in the provider request, not in the persisted user message. */
-export function applyHarnessPromptBehavior(
+/** Keep role behavior in the provider request, not in the persisted user message. */
+export function applyHarnessRolePrompt(
   userMessage: string,
-  behavior: HarnessPromptBehavior,
+  role: HarnessPromptRole | undefined,
 ): string {
-  const sections: Array<string> = [];
-  const role = behavior.role;
-  const roleInstructions = role?.instructions.trim();
-  if (role && roleInstructions) {
-    sections.push(`### Role: ${role.name}\n${roleInstructions}`);
-  }
-  for (const relationship of behavior.relationships) {
-    const instructions = relationship.instructions.trim();
-    if (!instructions) continue;
-    sections.push(
-      `### Relationship: ${relationship.name} (${relationship.direction})\n${instructions}`,
-    );
-  }
-  if (sections.length === 0) return userMessage;
+  const instructions = role?.instructions.trim();
+  if (role === undefined || !instructions) return userMessage;
   const prefix = [
-    "Follow the applicable T3 Harness behavior instructions while handling this request.",
-    ...sections,
+    "Follow the applicable T3 Harness role instructions while handling this request.",
+    `### Role: ${role.name}\n${instructions}`,
     "### User request",
   ].join("\n\n");
   const availablePrefixLength = Math.max(
@@ -47,4 +28,3 @@ export function applyHarnessPromptBehavior(
   }
   return `${prefix}\n\n${userMessage}`;
 }
-import { PROVIDER_SEND_TURN_MAX_INPUT_CHARS } from "@t3tools/contracts";
