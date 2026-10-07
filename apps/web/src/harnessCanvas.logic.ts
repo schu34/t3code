@@ -86,14 +86,8 @@ export interface HarnessCanvasSnapshot {
   readonly edges: ReadonlyArray<HarnessCanvasEdge>;
 }
 
-export interface HarnessCanvasPositionUpdate {
-  readonly agentId: string;
-  readonly position: HarnessCanvasPosition;
-}
-
-/** Actions are effects owned by the graph service, never local demo state. */
+/** Actions mutate graph behavior; canvas layout remains local to the open session. */
 export interface HarnessCanvasActions {
-  readonly updatePosition: (update: HarnessCanvasPositionUpdate) => Promise<void>;
   readonly createAgent: () => Promise<void>;
   readonly createChild: (agentId: string) => Promise<void>;
   readonly forkSidechat: (agentId: string, completedTurnId: string) => Promise<void>;
