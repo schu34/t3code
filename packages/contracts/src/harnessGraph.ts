@@ -49,10 +49,14 @@ export type HarnessRelationshipStructure = typeof HarnessRelationshipStructure.T
 
 export const HarnessMessageAuthorKind = Schema.Literals(["user", "agent"]);
 export type HarnessMessageAuthorKind = typeof HarnessMessageAuthorKind.Type;
-export const HarnessAgentBacking = Schema.Struct({
+/** Stable locator persisted with graph metadata, not a second agent runtime. */
+export const HarnessAgentBackingReference = Schema.Struct({
   kind: Schema.Literal("thread"),
   threadId: ThreadId,
 });
+export type HarnessAgentBackingReference = typeof HarnessAgentBackingReference.Type;
+
+export const HarnessAgentBacking = HarnessAgentBackingReference;
 export type HarnessAgentBacking = typeof HarnessAgentBacking.Type;
 
 export const HarnessRoleDefinition = Schema.Struct({
@@ -74,17 +78,25 @@ export const HarnessRelationshipDefinition = Schema.Struct({
 });
 export type HarnessRelationshipDefinition = typeof HarnessRelationshipDefinition.Type;
 
-export const HarnessAgent = Schema.Struct({
+/** Graph-owned overlay; presentation and lifecycle belong to the backing. */
+export const HarnessAgentMetadata = Schema.Struct({
   agentId: HarnessAgentId,
-  backing: HarnessAgentBacking,
-  projectId: ProjectId,
-  displayName: TrimmedNonEmptyString,
+  backing: HarnessAgentBackingReference,
   kind: HarnessAgentKind,
   roleDefinitionId: HarnessRoleDefinitionId,
-  status: HarnessAgentStatus,
   spawnedByAgentId: Schema.optional(HarnessAgentId),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
+});
+export type HarnessAgentMetadata = typeof HarnessAgentMetadata.Type;
+
+/** Read-only UI view assembled from graph metadata and its current backing. */
+export const HarnessAgent = Schema.Struct({
+  ...HarnessAgentMetadata.fields,
+  backing: HarnessAgentBacking,
+  projectId: ProjectId,
+  displayName: TrimmedNonEmptyString,
+  status: HarnessAgentStatus,
 });
 export type HarnessAgent = typeof HarnessAgent.Type;
 

@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 import {
   HarnessAgent,
+  HarnessAgentMetadata,
   HarnessCreateRelationshipDefinitionInput,
   HarnessSendCoordinationMessageInput,
 } from "./harnessGraph.ts";
@@ -24,6 +25,26 @@ describe("Harness MVP contracts", () => {
     expect(
       decodeAgent({ ...agent, backing: { kind: "thread", threadId: "thread-1" } }).backing,
     ).toEqual({ kind: "thread", threadId: "thread-1" });
+  });
+  it("accepts graph metadata without copying backing presentation or lifecycle", () => {
+    const metadata = Schema.decodeUnknownSync(HarnessAgentMetadata)({
+      agentId: "agent-1",
+      backing: { kind: "thread", threadId: "thread-1" },
+      kind: "delegated",
+      roleDefinitionId: "role-1",
+      spawnedByAgentId: "parent-agent",
+      createdAt: agent.createdAt,
+      updatedAt: agent.updatedAt,
+    });
+    expect(() => decodeAgent(metadata)).toThrow();
+    expect(
+      decodeAgent({
+        ...metadata,
+        projectId: "project-1",
+        displayName: "Current thread title",
+        status: "paused",
+      }),
+    ).toMatchObject({ displayName: "Current thread title", status: "paused" });
   });
   it("defines reusable behavior without enforcing role pairings", () => {
     expect(
