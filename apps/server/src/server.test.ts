@@ -5507,7 +5507,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               yield* client[WS_METHODS.harnessGraphUpsertRelationship]({
                 sourceAgentId: HarnessAgentId.make(`${project}-requester`),
                 targetAgentId: HarnessAgentId.make(`${project}-responder`),
-                structure: "delegation",
                 relationshipDefinitionId,
               });
               const graph = yield* client[WS_METHODS.harnessGraphRead]({ projectId });
@@ -5545,7 +5544,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             yield* client[WS_METHODS.harnessGraphUpsertRelationship]({
               sourceAgentId: relationship.sourceAgentId,
               targetAgentId: relationship.targetAgentId,
-              structure: "sidechat",
               relationshipDefinitionId,
             });
             const opened = yield* client[WS_METHODS.harnessGraphOpenChannel]({

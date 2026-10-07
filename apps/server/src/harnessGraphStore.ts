@@ -53,7 +53,6 @@ type RelationshipRow = {
   relationship_id: string;
   source_agent_id: string;
   target_agent_id: string;
-  structure: "delegation" | "sidechat";
   relationship_definition_id: string;
   topic: string | null;
   forked_from_turn_id: string | null;
@@ -103,12 +102,12 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
         ${now}
       )
     `;
-    for (const structure of ["delegation", "sidechat"]) {
+    for (const name of ["delegation", "sidechat"]) {
       yield* sql`
         INSERT OR IGNORE INTO harness_relationship_definitions
         VALUES (
-          ${`builtin:${structure}`},
-          ${structure},
+          ${`builtin:${name}`},
+          ${name},
           'Describe the task and relevant context.',
           'Respond with the result, rationale, and any blockers.',
           ${now},
@@ -216,7 +215,6 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
       relationshipId: HarnessRelationshipId.make(row.relationship_id),
       sourceAgentId: HarnessAgentId.make(row.source_agent_id),
       targetAgentId: HarnessAgentId.make(row.target_agent_id),
-      structure: row.structure,
       relationshipDefinitionId: HarnessRelationshipDefinitionId.make(
         row.relationship_definition_id,
       ),
@@ -492,12 +490,19 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
       return yield* invalid("Relationship endpoints cannot be changed.");
     const now = yield* nowIso;
     yield* sql`
-      INSERT INTO harness_relationships
+      INSERT INTO harness_relationships (
+        relationship_id,
+        source_agent_id,
+        target_agent_id,
+        relationship_definition_id,
+        topic,
+        forked_from_turn_id,
+        created_at
+      )
       VALUES (
         ${id},
         ${source.agentId},
         ${target.agentId},
-        ${input.structure},
         ${input.relationshipDefinitionId},
         ${input.topic ?? null},
         ${input.forkedFromTurnId ?? null},
