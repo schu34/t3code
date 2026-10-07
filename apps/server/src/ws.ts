@@ -13,6 +13,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
+import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
@@ -79,11 +80,14 @@ import {
   WORKTREE_SETUP_ACTIVITY_KIND,
   worktreeSetupActivityId,
   type WorktreeSetupSnapshot,
+  type HarnessGraphError,
+  HarnessGraphPersistenceError,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
+import { makeHarnessGraphStore } from "./harnessGraphStore.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "./config.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
@@ -176,6 +180,16 @@ import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
+const HARNESS_GRAPH_THREAD_EVENTS = new Set<string>([
+  "thread.created",
+  "thread.deleted",
+  "thread.archived",
+  "thread.unarchived",
+  "thread.settled",
+  "thread.unsettled",
+  "thread.meta-updated",
+  "thread.session-set",
+]);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -496,6 +510,7 @@ const makeWsRpcLayer = (
   clientOrigin: OrchestrationClientOrigin,
   clientAnalyticsProps: Readonly<Record<string, unknown>>,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
+  harnessGraphChanges: PubSub.PubSub<void>,
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -1830,6 +1845,44 @@ const makeWsRpcLayer = (
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
+      const isHarnessGraphError = (error: unknown): error is HarnessGraphError => {
+        if (typeof error !== "object" || error === null || !("_tag" in error)) return false;
+        const tag = (error as { readonly _tag?: unknown })._tag;
+        return tag === "HarnessGraphValidationError" || tag === "HarnessGraphPersistenceError";
+      };
+      const observeHarnessRpcEffect = <A, E, R>(
+        method: string,
+        effect: Effect.Effect<A, E, R>,
+        attributes: Readonly<Record<string, unknown>>,
+      ) =>
+        observeRpcEffect(
+          method,
+          effect.pipe(
+            Effect.mapError((error) =>
+              isHarnessGraphError(error)
+                ? error
+                : new HarnessGraphPersistenceError({ operation: method }),
+            ),
+          ),
+          attributes,
+        ) as unknown as Effect.Effect<A, HarnessGraphError, never>;
+      const observeHarnessRpcStreamEffect = <A, E, R>(
+        method: string,
+        effect: Effect.Effect<Stream.Stream<A, E, R>, E, R>,
+        attributes: Readonly<Record<string, unknown>>,
+      ) =>
+        observeRpcStreamEffect(
+          method,
+          effect.pipe(
+            Effect.mapError((error) =>
+              isHarnessGraphError(error)
+                ? error
+                : new HarnessGraphPersistenceError({ operation: method }),
+            ),
+          ),
+          attributes,
+        ) as unknown as Stream.Stream<A, HarnessGraphError, never>;
+      const graphStore = yield* makeHarnessGraphStore(harnessGraphChanges);
       return WsRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
@@ -3692,6 +3745,43 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "server" },
           ),
+        [WS_METHODS.harnessGraphRead]: (input) =>
+          observeHarnessRpcEffect(WS_METHODS.harnessGraphRead, graphStore.read(input), {
+            "rpc.aggregate": "harness",
+          }),
+        [WS_METHODS.harnessGraphSubscribe]: (input) =>
+          observeHarnessRpcStreamEffect(
+            WS_METHODS.harnessGraphSubscribe,
+            Effect.gen(function* () {
+              const subscription = yield* PubSub.subscribe(harnessGraphChanges);
+              const domainEvents = yield* orchestrationEngine.subscribeDomainEvents;
+              const initial = yield* graphStore.read(input);
+              // Thread lifecycle changes derived agents; ordinary assistant text does not.
+              const threadChanges = domainEvents.pipe(
+                Stream.filter((event) => HARNESS_GRAPH_THREAD_EVENTS.has(event.type)),
+                Stream.debounce(Duration.millis(100)),
+                Stream.map(() => undefined),
+              );
+              const changes = Stream.merge(
+                Stream.fromSubscription(subscription),
+                threadChanges,
+              ).pipe(Stream.mapEffect(() => graphStore.read(input)));
+              return Stream.concat(Stream.make(initial), changes);
+            }),
+            { "rpc.aggregate": "harness" },
+          ),
+        [WS_METHODS.harnessGraphCreateRole]: (input) =>
+          observeHarnessRpcEffect(WS_METHODS.harnessGraphCreateRole, graphStore.createRole(input), {
+            "rpc.aggregate": "harness",
+          }),
+        [WS_METHODS.harnessGraphSetAgent]: (input) =>
+          observeHarnessRpcEffect(WS_METHODS.harnessGraphSetAgent, graphStore.setAgent(input), {
+            "rpc.aggregate": "harness",
+          }),
+        [WS_METHODS.harnessGraphUpsertEdge]: (input) =>
+          observeHarnessRpcEffect(WS_METHODS.harnessGraphUpsertEdge, graphStore.upsertEdge(input), {
+            "rpc.aggregate": "harness",
+          }),
       });
     }),
   );
@@ -3727,6 +3817,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     });
     const pullRequests = yield* PullRequestService.PullRequestService;
     const sql = yield* SqlClient.SqlClient;
+    const harnessGraphChanges = yield* PubSub.unbounded<void>();
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -3765,6 +3856,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               clientOrigin,
               clientAnalyticsProps,
               previewAutomationBroker,
+              harnessGraphChanges,
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),

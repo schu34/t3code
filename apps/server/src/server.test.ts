@@ -16,6 +16,7 @@ import {
   EnvironmentId,
   EventId,
   GitCommandError,
+  HarnessRoleId,
   KeybindingRule,
   MessageId,
   ExternalLauncherCommandNotFoundError,
@@ -5438,6 +5439,41 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(record.resourceAttributes["service.name"], "t3-web");
         assert.equal(record.status?.code, String(span.status.code));
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("routes harness graph rpcs and surfaces validation errors", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const wsUrl = yield* getWsServerUrl("/ws");
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const roleId = HarnessRoleId.make("implementor");
+            yield* client[WS_METHODS.harnessGraphCreateRole]({
+              roleId,
+              name: "Implementor",
+              instructions: "Implement changes.",
+            });
+            const graph = yield* client[WS_METHODS.harnessGraphRead]({});
+            assert.deepEqual(
+              graph.roles.map((role) => role.roleId),
+              [roleId],
+            );
+            const duplicate = yield* client[WS_METHODS.harnessGraphCreateRole]({
+              roleId: HarnessRoleId.make("other"),
+              name: "Implementor",
+              instructions: "",
+            }).pipe(Effect.flip);
+            assert.equal(duplicate._tag, "HarnessGraphValidationError");
+            const missingThread = yield* client[WS_METHODS.harnessGraphSetAgent]({
+              threadId: ThreadId.make("missing"),
+              roleId,
+            }).pipe(Effect.flip);
+            assert.equal(missingThread._tag, "HarnessGraphValidationError");
+          }),
+        ),
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("routes websocket rpc server.upsertKeybinding", () =>
