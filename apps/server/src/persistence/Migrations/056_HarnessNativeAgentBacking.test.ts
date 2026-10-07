@@ -51,8 +51,6 @@ layer("056_HarnessNativeAgentBacking", (it) => {
         nativeColumns.map((column) => column.name),
         [
           "backing_kind",
-          "native_display_name",
-          "native_status",
           "parent_thread_id",
           "provider_agent_id",
           "provider_instance_id",

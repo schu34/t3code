@@ -10,7 +10,6 @@ import {
   ThreadId,
   TurnId,
   type HarnessAgentMetadata,
-  type HarnessAgentStatus,
   type HarnessCreateRelationshipDefinitionInput,
   type HarnessCreateRoleDefinitionInput,
   type HarnessGraphReadInput,
@@ -24,7 +23,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
-import { foldHarnessNativeActivities } from "./harnessGraph.ts";
+import { foldHarnessNativeActivities, type HarnessNativeAgentObservation } from "./harnessGraph.ts";
 const decodePayload = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -40,10 +39,7 @@ type AgentMetadataRow = {
   provider_instance_id: string | null;
   provider_agent_id: string | null;
   parent_thread_id: string | null;
-  native_display_name: string | null;
-  native_status: HarnessAgentStatus | null;
   kind: HarnessAgentMetadata["kind"];
-
   role_definition_id: string;
   spawned_by_agent_id: string | null;
   created_at: string;
@@ -52,17 +48,18 @@ type AgentMetadataRow = {
 const toAgentMetadata = (row: AgentMetadataRow) =>
   ({
     agentId: HarnessAgentId.make(row.agent_id),
-    backing: row.backing_kind === "native"
-      ? {
-          kind: "native" as const,
-          provider: row.provider_name!,
-          providerAgentId: row.provider_agent_id!,
-          parentThreadId: ThreadId.make(row.parent_thread_id!),
-          ...(row.provider_instance_id === null
-            ? {}
-            : { providerInstanceId: ProviderInstanceId.make(row.provider_instance_id) }),
-        }
-      : { kind: "thread" as const, threadId: ThreadId.make(row.thread_id!) },
+    backing:
+      row.backing_kind === "native"
+        ? {
+            kind: "native" as const,
+            provider: row.provider_name!,
+            providerAgentId: row.provider_agent_id!,
+            parentThreadId: ThreadId.make(row.parent_thread_id!),
+            ...(row.provider_instance_id === null
+              ? {}
+              : { providerInstanceId: ProviderInstanceId.make(row.provider_instance_id) }),
+          }
+        : { kind: "thread" as const, threadId: ThreadId.make(row.thread_id!) },
     kind: row.kind,
     roleDefinitionId: HarnessRoleDefinitionId.make(row.role_definition_id),
     ...(row.spawned_by_agent_id === null
@@ -240,6 +237,7 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
       group.push({ kind: row.kind, payload, createdAt: row.created_at });
       activities.set(row.thread_id, group);
     }
+    const nativeObservations = new Map<string, HarnessNativeAgentObservation>();
     for (const [threadId, group] of activities) {
       const parent = byId.get(ThreadId.make(threadId));
       if (!parent) continue;
@@ -250,15 +248,10 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
       // Insert all children before assigning nested creation origins.
       for (const o of observations) {
         const id = ids.get(o.providerAgentId)!;
-        const old = rowsById.get(id);
-        if (
-          old?.native_display_name === o.title &&
-          old.native_status === o.status &&
-          old.updated_at === o.observedAt
-        )
-          continue;
+        nativeObservations.set(id, o);
+        if (rowsById.has(id)) continue;
         yield* sql`
-          INSERT INTO harness_agents (
+          INSERT OR IGNORE INTO harness_agents (
             agent_id,
             kind,
             role_definition_id,
@@ -268,9 +261,7 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
             provider_name,
             provider_instance_id,
             provider_agent_id,
-            parent_thread_id,
-            native_display_name,
-            native_status
+            parent_thread_id
           )
           VALUES (
             ${id},
@@ -282,16 +273,8 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
             ${parent.session?.providerName ?? "native"},
             ${parent.session?.providerInstanceId ?? null},
             ${o.providerAgentId},
-            ${threadId},
-            ${o.title},
-            ${o.status}
+            ${threadId}
           )
-          ON CONFLICT (agent_id)
-          DO UPDATE
-          SET
-            native_display_name = excluded.native_display_name,
-            native_status = excluded.native_status,
-            updated_at = excluded.updated_at
         `;
         yield* bump;
       }
@@ -330,10 +313,10 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
         `;
       }
     }
-    return byId;
+    return { byId, nativeObservations };
   });
   const agents = Effect.gen(function* () {
-    const byId = yield* sync;
+    const { byId, nativeObservations } = yield* sync;
     const rows = yield* sql<AgentMetadataRow>`
       SELECT
         *
@@ -347,6 +330,9 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
         ThreadId.make(row.backing_kind === "native" ? row.parent_thread_id! : row.thread_id!),
       );
       if (!thread) return [];
+      const metadata = toAgentMetadata(row);
+      const native = nativeObservations.get(row.agent_id);
+      if (metadata.backing.kind === "native" && native === undefined) return [];
       const status =
         thread.session?.status === "error"
           ? ("failed" as const)
@@ -357,18 +343,18 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
               : ("active" as const);
       return [
         {
-          ...toAgentMetadata(row),
-          backing: row.backing_kind === "native"
-            ? {
-                ...toAgentMetadata(row).backing,
-                capabilities: ["inspect" as const],
-              }
-            : { kind: "thread" as const, threadId: thread.id },
+          ...metadata,
+          backing:
+            metadata.backing.kind === "native"
+              ? {
+                  ...metadata.backing,
+                  capabilities: ["inspect" as const],
+                }
+              : metadata.backing,
           projectId: thread.projectId,
-          displayName: row.backing_kind === "native" ? row.native_display_name! : thread.title,
-          status: row.backing_kind === "native" ? row.native_status! : status,
-          updatedAt: row.backing_kind === "native" ? row.updated_at : thread.updatedAt,
-
+          displayName: native?.title ?? thread.title,
+          status: native?.status ?? status,
+          updatedAt: native?.observedAt ?? thread.updatedAt,
         },
       ];
     });
