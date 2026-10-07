@@ -34,12 +34,22 @@ export const HarnessAgentMetadata = Schema.Struct({
 });
 export type HarnessAgentMetadata = typeof HarnessAgentMetadata.Type;
 
-/** Read view assembled from metadata and the backing thread. */
+/**
+ * Read view assembled from metadata and the backing thread. Provider-native
+ * children are derived from provider activity, addressed by their child
+ * transcript thread id, and are inspect-only.
+ */
 export const HarnessAgent = Schema.Struct({
   ...HarnessAgentMetadata.fields,
   projectId: ProjectId,
   displayName: TrimmedNonEmptyString,
   status: HarnessAgentStatus,
+  native: Schema.optional(
+    Schema.Struct({
+      provider: TrimmedNonEmptyString,
+      providerAgentId: TrimmedNonEmptyString,
+    }),
+  ),
 });
 export type HarnessAgent = typeof HarnessAgent.Type;
 

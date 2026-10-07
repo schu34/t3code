@@ -1,9 +1,16 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { HarnessRoleId, ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
+import {
+  HarnessRoleId,
+  ProjectId,
+  providerChildThreadId,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { makeHarnessGraphStore } from "./harnessGraphStore.ts";
@@ -12,6 +19,7 @@ import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 const testLayer = Layer.mergeAll(SqlitePersistenceMemory, NodeCrypto.layer);
 
 const createdAt = "2026-10-04T00:00:00.000Z";
+const encodePayload = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const parent = ThreadId.make("parent");
 
 const insertThread = Effect.fnUntraced(function* (threadId: string, projectId = "project") {
@@ -35,6 +43,35 @@ const insertThread = Effect.fnUntraced(function* (threadId: string, projectId = 
       'full-access',
       'default',
       ${createdAt},
+      ${createdAt}
+    )
+  `;
+});
+
+const appendTaskActivity = Effect.fnUntraced(function* (
+  sequence: number,
+  payload: Record<string, unknown>,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`
+    INSERT INTO projection_thread_activities (
+      activity_id,
+      thread_id,
+      sequence,
+      tone,
+      kind,
+      summary,
+      payload_json,
+      created_at
+    )
+    VALUES (
+      ${`activity-${sequence}`},
+      ${parent},
+      ${sequence},
+      'info',
+      'task.updated',
+      'Child activity',
+      ${encodePayload({ agentKind: "agent", ...payload })},
       ${createdAt}
     )
   `;
@@ -74,6 +111,25 @@ it.effect("reads every thread as an agent without writing graph metadata", () =>
   }).pipe(Effect.provide(testLayer)),
 );
 
+it.effect("derives native children and their nesting from provider activity", () =>
+  Effect.gen(function* () {
+    const store = yield* makeStore();
+    yield* appendTaskActivity(1, { taskId: "child", title: "Explore", status: "running" });
+    yield* appendTaskActivity(2, { taskId: "grandchild", parentAgentId: "child", title: "Dig" });
+    yield* appendTaskActivity(3, { taskId: "child", title: "Explore", status: "idle" });
+
+    const graph = yield* store.read();
+    const child = graph.agents.find((agent) => agent.native?.providerAgentId === "child")!;
+    const grandchild = graph.agents.find(
+      (agent) => agent.native?.providerAgentId === "grandchild",
+    )!;
+    assert.equal(child.threadId, providerChildThreadId(parent, "child"));
+    assert.equal(child.parentThreadId, parent);
+    assert.equal(child.status, "paused");
+    assert.equal(grandchild.parentThreadId, child.threadId);
+  }).pipe(Effect.provide(testLayer)),
+);
+
 it.effect("sets roles freely but creation origin only once", () =>
   Effect.gen(function* () {
     const store = yield* makeStore();
@@ -106,6 +162,10 @@ it.effect("sets roles freely but creation origin only once", () =>
       .setAgent({ threadId: parent, parentThreadId: child })
       .pipe(Effect.flip);
     assert.equal(cycle._tag, "HarnessGraphValidationError");
+    const native = yield* store
+      .setAgent({ threadId: providerChildThreadId(parent, "child"), roleId })
+      .pipe(Effect.flip);
+    assert.equal(native._tag, "HarnessGraphValidationError");
   }).pipe(Effect.provide(testLayer)),
 );
 

@@ -1,6 +1,8 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 import { HarnessAgent, HarnessSetAgentInput, HarnessUpsertEdgeInput } from "./harnessGraph.ts";
+import { ThreadId } from "./baseSchemas.ts";
+import { providerChildThreadId } from "./orchestration.ts";
 
 const decodeAgent = Schema.decodeUnknownSync(HarnessAgent);
 const decodeSetAgent = Schema.decodeUnknownSync(HarnessSetAgentInput);
@@ -28,5 +30,19 @@ describe("Harness graph contracts", () => {
       sourceThreadId: "implementor",
       targetThreadId: "reviewer",
     });
+  });
+
+  it("addresses a provider-native child by its transcript thread", () => {
+    const parentThreadId = ThreadId.make("thread-1");
+    const agent = decodeAgent({
+      threadId: providerChildThreadId(parentThreadId, "child-1"),
+      parentThreadId,
+      projectId: "project-1",
+      displayName: "Explore the code",
+      status: "active",
+      native: { provider: "codex", providerAgentId: "child-1" },
+    });
+    expect(agent.threadId).toBe("harness-child:thread-1:child-1");
+    expect(agent.native?.providerAgentId).toBe("child-1");
   });
 });

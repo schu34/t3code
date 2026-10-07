@@ -2,6 +2,7 @@ import {
   HarnessEdgeId,
   HarnessGraphValidationError,
   HarnessRoleId,
+  providerChildThreadId,
   ThreadId,
   TurnId,
   type HarnessAgent,
@@ -16,8 +17,12 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as PubSub from "effect/PubSub";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { foldHarnessNativeActivities } from "./harnessGraph.ts";
+
+const decodePayload = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const invalid = (detail: string) =>
   new HarnessGraphValidationError({ operation: "harness-graph", detail });
@@ -29,6 +34,7 @@ type ThreadRow = {
   archived_at: string | null;
   settled_override: string | null;
   session_status: string | null;
+  provider_name: string | null;
 };
 type AgentRow = {
   thread_id: string;
@@ -53,7 +59,8 @@ function threadStatus(row: ThreadRow): HarnessAgent["status"] {
 
 /**
  * SQL store for graph-owned metadata. Thread title, project, and lifecycle stay
- * in orchestration and are joined on read.
+ * in orchestration and are joined on read; provider-native children are folded
+ * from provider activity on read and never persisted.
  */
 export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSub.PubSub<void>) {
   const sql = yield* SqlClient.SqlClient;
@@ -67,7 +74,8 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
       t.title,
       t.archived_at,
       t.settled_override,
-      s.status AS session_status
+      s.status AS session_status,
+      s.provider_name
     FROM projection_threads t
     LEFT JOIN projection_thread_sessions s
       ON s.thread_id = t.thread_id
@@ -79,6 +87,87 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
       t.thread_id
   `;
 
+  const nativeAgents = Effect.fnUntraced(function* (
+    projectId: ProjectId | null,
+    threads: ReadonlyMap<string, ThreadRow>,
+  ) {
+    const rows = yield* sql<{
+      thread_id: string;
+      kind: string;
+      payload_json: string;
+      created_at: string;
+    }>`
+      SELECT
+        a.thread_id,
+        a.kind,
+        a.payload_json,
+        a.created_at
+      FROM projection_thread_activities a
+      JOIN projection_threads t
+        ON t.thread_id = a.thread_id
+      WHERE t.deleted_at IS NULL
+        AND t.thread_kind = 'user'
+        AND (${projectId} IS NULL OR t.project_id = ${projectId})
+        AND (
+          a.kind IN (
+            'task.started',
+            'task.progress',
+            'task.updated',
+            'task.completed'
+          )
+          OR json_extract(a.payload_json, '$.itemType') = 'collab_agent_tool_call'
+        )
+      ORDER BY
+        a.thread_id,
+        a.sequence,
+        a.created_at,
+        a.activity_id
+    `;
+    const byThread = new Map<
+      string,
+      Array<{ kind: string; payload: unknown; createdAt: string }>
+    >();
+    for (const row of rows) {
+      let payload: unknown;
+      try {
+        payload = decodePayload(row.payload_json);
+      } catch {
+        continue;
+      }
+      const group = byThread.get(row.thread_id) ?? [];
+      group.push({ kind: row.kind, payload, createdAt: row.created_at });
+      byThread.set(row.thread_id, group);
+    }
+    const agents: HarnessAgent[] = [];
+    for (const [parentId, group] of byThread) {
+      const parent = threads.get(parentId);
+      if (parent === undefined) continue;
+      const parentThreadId = ThreadId.make(parentId);
+      const observations = foldHarnessNativeActivities(group);
+      const observed = new Set(observations.map((o) => o.providerAgentId));
+      for (const o of observations) {
+        const creator =
+          o.parentProviderAgentId !== null &&
+          o.parentProviderAgentId !== o.providerAgentId &&
+          observed.has(o.parentProviderAgentId)
+            ? providerChildThreadId(parentThreadId, o.parentProviderAgentId)
+            : parentThreadId;
+        agents.push({
+          threadId: providerChildThreadId(parentThreadId, o.providerAgentId),
+          parentThreadId: creator,
+          projectId: parent.project_id as ProjectId,
+          displayName: o.title,
+          status: o.status,
+          native: {
+            provider: parent.provider_name ?? "native",
+            providerAgentId: o.providerAgentId,
+          },
+        });
+      }
+    }
+    return agents;
+  });
+
   const read = Effect.fnUntraced(function* (input: HarnessGraphReadInput = {}) {
     const projectId = input.projectId ?? null;
     const threads = new Map((yield* threadRows(projectId)).map((row) => [row.thread_id, row]));
@@ -89,7 +178,7 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
         FROM harness_agents
       `).map((row) => [row.thread_id, row]),
     );
-    const agents = [...threads.values()].map((thread): HarnessAgent => {
+    const threadAgents = [...threads.values()].map((thread): HarnessAgent => {
       const row = metadata.get(thread.thread_id);
       return {
         threadId: ThreadId.make(thread.thread_id),
@@ -103,6 +192,7 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
         status: threadStatus(thread),
       };
     });
+    const agents = [...threadAgents, ...(yield* nativeAgents(projectId, threads))];
     const agentIds = new Set<string>(agents.map((agent) => agent.threadId));
     const edges = (yield* sql<EdgeRow>`
       SELECT

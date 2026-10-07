@@ -190,6 +190,12 @@ const HARNESS_GRAPH_THREAD_EVENTS = new Set<string>([
   "thread.meta-updated",
   "thread.session-set",
 ]);
+const HARNESS_GRAPH_TASK_ACTIVITIES = new Set<string>([
+  "task.started",
+  "task.progress",
+  "task.updated",
+  "task.completed",
+]);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -3756,9 +3762,21 @@ const makeWsRpcLayer = (
               const subscription = yield* PubSub.subscribe(harnessGraphChanges);
               const domainEvents = yield* orchestrationEngine.subscribeDomainEvents;
               const initial = yield* graphStore.read(input);
-              // Thread lifecycle changes derived agents; ordinary assistant text does not.
+              // Thread lifecycle and native child activity change derived agents; ordinary
+              // assistant text does not.
               const threadChanges = domainEvents.pipe(
-                Stream.filter((event) => HARNESS_GRAPH_THREAD_EVENTS.has(event.type)),
+                Stream.filter((event) => {
+                  if (event.type !== "thread.activity-appended")
+                    return HARNESS_GRAPH_THREAD_EVENTS.has(event.type);
+                  const activity = event.payload.activity;
+                  return (
+                    HARNESS_GRAPH_TASK_ACTIVITIES.has(activity.kind) ||
+                    (typeof activity.payload === "object" &&
+                      activity.payload !== null &&
+                      (activity.payload as { readonly itemType?: unknown }).itemType ===
+                        "collab_agent_tool_call")
+                  );
+                }),
                 Stream.debounce(Duration.millis(100)),
                 Stream.map(() => undefined),
               );
