@@ -4,7 +4,6 @@ import {
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentRpcSubscriptionAtomFamily,
 } from "@t3tools/client-runtime/state/runtime";
-import * as Stream from "effect/Stream";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 
@@ -21,35 +20,15 @@ export const harnessGraphSubscribe = createEnvironmentRpcSubscriptionAtomFamily(
   {
     label: "environment-data:harness-graph:subscribe",
     tag: WS_METHODS.harnessGraphSubscribe,
-    transform: (events) =>
-      events.pipe(
-        Stream.filter((event): event is NonNullable<typeof event> => event !== null),
-        Stream.map((event) => event.snapshot),
-      ),
   },
 );
 
-export const harnessGraphRegisterAgent = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "environment-data:harness-graph:register-agent",
-  tag: WS_METHODS.harnessGraphRegisterAgent,
+export const harnessGraphSetAgent = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:harness-graph:set-agent",
+  tag: WS_METHODS.harnessGraphSetAgent,
 });
 
-export const harnessGraphUpsertRelationship = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "environment-data:harness-graph:upsert-relationship",
-  tag: WS_METHODS.harnessGraphUpsertRelationship,
-});
-
-export const harnessGraphOpenChannel = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "environment-data:harness-graph:open-channel",
-  tag: WS_METHODS.harnessGraphOpenChannel,
-});
-
-export const harnessGraphGetChannel = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "environment-data:harness-graph:get-channel",
-  tag: WS_METHODS.harnessGraphGetChannel,
-});
-
-export const harnessGraphSendCoordination = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "environment-data:harness-graph:send-coordination",
-  tag: WS_METHODS.harnessGraphSendCoordination,
+export const harnessGraphUpsertEdge = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:harness-graph:upsert-edge",
+  tag: WS_METHODS.harnessGraphUpsertEdge,
 });

@@ -24,7 +24,7 @@ Harness stores standalone and worktree development state under `.harness` (or `~
 
 ## Agent canvas
 
-The chat landing page shows project threads and supported provider-native child agents as a graph. Select a native child to inspect its live transcript in the parent thread's Agents panel. Agent relationships persist in the environment; canvas positions last only for the current session.
+The chat landing page shows project threads and supported provider-native child agents as a graph. Select a native child to inspect its live transcript in the parent thread's Agents panel. Roles and connections persist in the environment; canvas positions last only for the current session.
 
 ## Installation
 
