@@ -180,6 +180,16 @@ import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
+const HARNESS_GRAPH_THREAD_EVENTS = new Set<string>([
+  "thread.created",
+  "thread.deleted",
+  "thread.archived",
+  "thread.unarchived",
+  "thread.settled",
+  "thread.unsettled",
+  "thread.meta-updated",
+  "thread.session-set",
+]);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -1835,10 +1845,6 @@ const makeWsRpcLayer = (
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
-      // Harness keeps graph and coordination state in its own durable tables. The
-      // helpers below intentionally live beside the RPC layer for the first slice:
-      // they share the same authenticated SQL connection and can be moved behind a
-      // service once the graph protocol stabilizes.
       const isHarnessGraphError = (error: unknown): error is HarnessGraphError => {
         if (typeof error !== "object" || error === null || !("_tag" in error)) return false;
         const tag = (error as { readonly _tag?: unknown })._tag;
@@ -3748,59 +3754,32 @@ const makeWsRpcLayer = (
             WS_METHODS.harnessGraphSubscribe,
             Effect.gen(function* () {
               const subscription = yield* PubSub.subscribe(harnessGraphChanges);
+              const domainEvents = yield* orchestrationEngine.subscribeDomainEvents;
               const initial = yield* graphStore.read(input);
-              const changes = Stream.fromSubscription(subscription).pipe(
-                Stream.mapEffect(() =>
-                  graphStore
-                    .read(input)
-                    .pipe(Effect.map((snapshot) => ({ kind: "changed" as const, snapshot }))),
-                ),
+              // Thread lifecycle changes derived agents; ordinary assistant text does not.
+              const threadChanges = domainEvents.pipe(
+                Stream.filter((event) => HARNESS_GRAPH_THREAD_EVENTS.has(event.type)),
+                Stream.debounce(Duration.millis(100)),
+                Stream.map(() => undefined),
               );
-              return Stream.concat(
-                Stream.make({ kind: "snapshot" as const, snapshot: initial }),
-                changes,
-              );
+              const changes = Stream.merge(
+                Stream.fromSubscription(subscription),
+                threadChanges,
+              ).pipe(Stream.mapEffect(() => graphStore.read(input)));
+              return Stream.concat(Stream.make(initial), changes);
             }),
             { "rpc.aggregate": "harness" },
           ),
-        [WS_METHODS.harnessGraphGetChannel]: (input) =>
-          observeHarnessRpcEffect(
-            WS_METHODS.harnessGraphGetChannel,
-            graphStore.getChannel(input.channelId),
-            { "rpc.aggregate": "harness" },
-          ),
-        [WS_METHODS.harnessGraphCreateRoleDefinition]: (input) =>
-          observeHarnessRpcEffect(
-            WS_METHODS.harnessGraphCreateRoleDefinition,
-            graphStore.createRole(input),
-            { "rpc.aggregate": "harness" },
-          ),
-        [WS_METHODS.harnessGraphCreateRelationshipDefinition]: (input) =>
-          observeHarnessRpcEffect(
-            WS_METHODS.harnessGraphCreateRelationshipDefinition,
-            graphStore.createDefinition(input),
-            { "rpc.aggregate": "harness" },
-          ),
-        [WS_METHODS.harnessGraphRegisterAgent]: (input) =>
-          observeHarnessRpcEffect(
-            WS_METHODS.harnessGraphRegisterAgent,
-            graphStore.registerAgent(input),
-            { "rpc.aggregate": "harness" },
-          ),
-        [WS_METHODS.harnessGraphUpsertRelationship]: (input) =>
-          observeHarnessRpcEffect(
-            WS_METHODS.harnessGraphUpsertRelationship,
-            graphStore.upsertRelationship(input),
-            { "rpc.aggregate": "harness" },
-          ),
-        [WS_METHODS.harnessGraphOpenChannel]: (input) =>
-          observeHarnessRpcEffect(
-            WS_METHODS.harnessGraphOpenChannel,
-            graphStore.openChannel(input),
-            { "rpc.aggregate": "harness" },
-          ),
-        [WS_METHODS.harnessGraphSendCoordination]: (input) =>
-          observeHarnessRpcEffect(WS_METHODS.harnessGraphSendCoordination, graphStore.send(input), {
+        [WS_METHODS.harnessGraphCreateRole]: (input) =>
+          observeHarnessRpcEffect(WS_METHODS.harnessGraphCreateRole, graphStore.createRole(input), {
+            "rpc.aggregate": "harness",
+          }),
+        [WS_METHODS.harnessGraphSetAgent]: (input) =>
+          observeHarnessRpcEffect(WS_METHODS.harnessGraphSetAgent, graphStore.setAgent(input), {
+            "rpc.aggregate": "harness",
+          }),
+        [WS_METHODS.harnessGraphUpsertEdge]: (input) =>
+          observeHarnessRpcEffect(WS_METHODS.harnessGraphUpsertEdge, graphStore.upsertEdge(input), {
             "rpc.aggregate": "harness",
           }),
       });
