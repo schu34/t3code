@@ -10,6 +10,7 @@ import {
 const decodeAgent = Schema.decodeUnknownSync(HarnessAgent);
 const decodeMetadata = Schema.decodeUnknownSync(HarnessAgentMetadata);
 const decodeRelationship = Schema.decodeUnknownSync(HarnessCreateRelationshipDefinitionInput);
+const decodeLink = Schema.decodeUnknownSync(HarnessUpsertRelationshipInput);
 const decodeSend = Schema.decodeUnknownSync(HarnessSendCoordinationMessageInput);
 describe("Harness MVP contracts", () => {
   const agent = {
@@ -59,7 +60,7 @@ describe("Harness MVP contracts", () => {
     ).toMatchObject({ name: "Review" });
   });
   it("connects agents through behavior without encoding their creation hierarchy", () => {
-    const link = Schema.decodeUnknownSync(HarnessUpsertRelationshipInput)({
+    const link = decodeLink({
       relationshipId: "review-link",
       sourceAgentId: "implementor",
       targetAgentId: "reviewer",
