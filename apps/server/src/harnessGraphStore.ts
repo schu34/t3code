@@ -347,7 +347,10 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
             metadata.backing.kind === "native"
               ? {
                   ...metadata.backing,
-                  threadId: providerChildThreadId(metadata.backing.parentThreadId, metadata.backing.providerAgentId),
+                  threadId: providerChildThreadId(
+                    metadata.backing.parentThreadId,
+                    metadata.backing.providerAgentId,
+                  ),
                   capabilities: ["inspect" as const],
                 }
               : metadata.backing,
