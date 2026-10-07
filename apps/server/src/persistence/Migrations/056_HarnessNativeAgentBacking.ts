@@ -8,7 +8,10 @@ export default Effect.gen(function* () {
   yield* sql`
     ALTER TABLE harness_agents
     ADD COLUMN backing_kind TEXT NOT NULL DEFAULT 'thread'
-      CHECK (backing_kind IN ('thread', 'native'))
+      CHECK (backing_kind IN (
+      'thread',
+      'native'
+    ))
   `;
   yield* sql`
     ALTER TABLE harness_agents
@@ -26,17 +29,38 @@ export default Effect.gen(function* () {
     ALTER TABLE harness_agents
     ADD COLUMN parent_thread_id TEXT
   `;
-  yield* sql`ALTER TABLE harness_agents ADD COLUMN native_display_name TEXT`;
-  yield* sql`ALTER TABLE harness_agents ADD COLUMN native_status TEXT CHECK (native_status IN ('active', 'paused', 'completed', 'failed'))`;
+  yield* sql`
+    ALTER TABLE harness_agents
+    ADD COLUMN native_display_name TEXT
+  `;
+  yield* sql`
+    ALTER TABLE harness_agents
+    ADD COLUMN native_status TEXT
+      CHECK (native_status IN (
+      'active',
+      'paused',
+      'completed',
+      'failed'
+    ))
+  `;
   yield* sql`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_harness_agents_native_provider_ref
-    ON harness_agents(parent_thread_id, provider_name, provider_agent_id)
+    ON harness_agents (
+      parent_thread_id,
+      provider_name,
+      provider_agent_id
+    )
     WHERE backing_kind = 'native'
       AND provider_agent_id IS NOT NULL
   `;
   yield* sql`
     CREATE INDEX IF NOT EXISTS idx_harness_agents_native_parent_thread
-    ON harness_agents(parent_thread_id, backing_kind, created_at, agent_id)
+    ON harness_agents (
+      parent_thread_id,
+      backing_kind,
+      created_at,
+      agent_id
+    )
     WHERE backing_kind = 'native'
   `;
 });

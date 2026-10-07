@@ -15,21 +15,35 @@ layer("056_HarnessNativeAgentBacking", (it) => {
       yield* runMigrations({ toMigrationInclusive: 56 });
 
       const migration = yield* sql<{ readonly migration_id: number }>`
-        SELECT migration_id FROM effect_sql_migrations WHERE migration_id = 56
+        SELECT
+          migration_id
+        FROM effect_sql_migrations
+        WHERE migration_id = 56
       `;
       const nativeColumns = yield* sql<{ readonly name: string }>`
-        SELECT name
+        SELECT
+          name
         FROM pragma_table_info('harness_agents')
         WHERE name IN (
-          'backing_kind', 'provider_name', 'provider_instance_id',
-          'provider_agent_id', 'parent_thread_id', 'native_display_name', 'native_status'
+          'backing_kind',
+          'provider_name',
+          'provider_instance_id',
+          'provider_agent_id',
+          'parent_thread_id',
+          'native_display_name',
+          'native_status'
         )
-        ORDER BY name
+        ORDER BY
+          name
       `;
       const indexes = yield* sql<{ readonly name: string }>`
-        SELECT name FROM sqlite_master
-        WHERE type = 'index' AND name LIKE 'idx_harness_agents_native_%'
-        ORDER BY name
+        SELECT
+          name
+        FROM sqlite_master
+        WHERE type = 'index'
+        AND name LIKE 'idx_harness_agents_native_%'
+        ORDER BY
+          name
       `;
 
       assert.equal(migration.length, 1);
