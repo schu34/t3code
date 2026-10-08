@@ -429,7 +429,7 @@ function HarnessCanvasInner({
   selectedAgentId = null,
   className,
 }: HarnessCanvasProps) {
-  const [showArchivedCompleted, setShowArchivedCompleted] = useState(true);
+  const [showArchivedCompleted, setShowArchivedCompleted] = useState(false);
   const [collapsedAgentIds, setCollapsedAgentIds] = useState<ReadonlySet<string>>(new Set());
   const [showDetails, setShowDetails] = useState(false);
   const [localPositions, setLocalPositions] = useState<ReadonlyMap<string, HarnessCanvasPosition>>(
