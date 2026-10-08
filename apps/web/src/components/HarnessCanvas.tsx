@@ -48,6 +48,7 @@ import {
   type HarnessCanvasPosition,
   type HarnessCanvasSnapshot,
   type HarnessEdgeKind,
+  layoutHarnessCanvasAgents,
   mergeHarnessCanvasNodeState,
   selectHarnessCanvasNodeSelection,
   selectHarnessCanvasGraph,
@@ -440,10 +441,21 @@ function HarnessCanvasInner({
   const nodesInitialized = useNodesInitialized();
   const { fitView } = useReactFlow();
 
-  const visibleSnapshot = useMemo(
-    () => selectHarnessCanvasGraph(snapshot, { collapsedAgentIds, showArchivedCompleted }),
-    [collapsedAgentIds, showArchivedCompleted, snapshot],
-  );
+  const visibleSnapshot = useMemo(() => {
+    const visible = selectHarnessCanvasGraph(snapshot, {
+      collapsedAgentIds,
+      showArchivedCompleted,
+    });
+    // Lay out only the shown agents so hidden ones leave no gaps; the top inset
+    // clears the toolbar panels.
+    return {
+      ...visible,
+      agents: layoutHarnessCanvasAgents(
+        visible.agents.map((agent) => ({ ...agent, position: null })),
+        { topInset: 280 },
+      ),
+    };
+  }, [collapsedAgentIds, showArchivedCompleted, snapshot]);
   const projectGroups = useMemo(() => projectCounts(visibleSnapshot), [visibleSnapshot]);
 
   const onCreateChild = useCallback(

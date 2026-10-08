@@ -17,7 +17,6 @@ import {
   buildHarnessCanvasSnapshotFromThreads,
   deriveHarnessCreationEdges,
   harnessAgentId,
-  layoutHarnessCanvasAgents,
   type HarnessCanvasActions,
   type HarnessCanvasAgent,
   type HarnessCanvasSnapshot,
@@ -120,8 +119,6 @@ function buildSnapshot(
             : ("sidechat" as const),
       parentAgentId:
         parentThreadId === undefined ? null : harnessAgentId(environmentId, parentThreadId),
-      // Base positions are fallback layout, not user-dragged session positions.
-      position: null,
     };
   });
   const edges = [
@@ -135,7 +132,7 @@ function buildSnapshot(
     })),
   ];
   return {
-    agents: layoutHarnessCanvasAgents(agentsWithProvenance, { topInset: 280 }),
+    agents: agentsWithProvenance,
     edges,
   };
 }
