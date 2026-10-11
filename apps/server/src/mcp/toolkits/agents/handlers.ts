@@ -13,6 +13,11 @@ import { AgentMessageFailedError, AgentNotConnectedError, AgentsToolkit } from "
 
 const attribute = (value: string) => value.replaceAll(/["\n\r]/g, " ").trim();
 
+// Agents otherwise assume their final answer reaches the sender and end the turn without
+// handing off.
+const AGENT_MESSAGE_FOOTER =
+  "Your final answer in this turn is not seen by the sender. Use send_agent_message to reply, or to hand off to the next agent if your role says to.";
+
 /** The text a recipient sees; the tag tells it who wrote the message and where to answer. */
 export function formatAgentMessage(
   sender: HarnessConnections["self"],
@@ -21,7 +26,7 @@ export function formatAgentMessage(
 ): string {
   const from = attribute(sender?.name ?? "Agent");
   const role = sender?.role ? ` role="${attribute(sender.role)}"` : "";
-  return `<agent_message from="${from}"${role} thread_id="${senderThreadId}">\n${message}\n</agent_message>`;
+  return `<agent_message from="${from}"${role} thread_id="${senderThreadId}">\n${message}\n</agent_message>\n\n${AGENT_MESSAGE_FOOTER}`;
 }
 
 const make = Effect.gen(function* () {

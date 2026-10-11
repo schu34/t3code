@@ -130,7 +130,9 @@ describe("agents toolkit handlers", () => {
           runtimeMode: "approval-required",
           message: {
             role: "user",
-            text: '<agent_message from="Senior Eng" thread_id="senior">\nTake auth.\n</agent_message>',
+            text: expect.stringMatching(
+              /^<agent_message from="Senior Eng" thread_id="senior">\nTake auth\.\n<\/agent_message>\n\n.*send_agent_message/,
+            ),
           },
         },
       ]);
