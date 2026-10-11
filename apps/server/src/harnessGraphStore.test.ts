@@ -13,7 +13,7 @@ import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { makeHarnessGraphStore } from "./harnessGraphStore.ts";
+import { makeHarnessGraphStore, readHarnessConnections } from "./harnessGraphStore.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 
 const testLayer = Layer.mergeAll(SqlitePersistenceMemory, NodeCrypto.layer);
@@ -189,5 +189,36 @@ it.effect("links agents within a project and hides edges to deleted threads", ()
 
     yield* sql`DELETE FROM projection_threads WHERE thread_id = ${reviewer}`;
     assert.equal((yield* store.read()).edges.length, 0);
+  }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("lists the agents a thread may message from its edges and delegation", () =>
+  Effect.gen(function* () {
+    const store = yield* makeStore();
+    const lead = ThreadId.make("lead");
+    const reviewer = ThreadId.make("reviewer");
+    const stranger = ThreadId.make("stranger");
+    for (const threadId of [lead, reviewer, stranger]) yield* insertThread(threadId);
+    const roleId = HarnessRoleId.make("reviewer");
+    yield* store.createRole({ roleId, name: "Reviewer", instructions: "Review it." });
+    yield* store.setAgent({ threadId: reviewer, roleId });
+    yield* store.setAgent({ threadId: parent, parentThreadId: lead });
+    yield* store.upsertEdge({ sourceThreadId: reviewer, targetThreadId: parent, label: "review" });
+    yield* store.upsertEdge({ sourceThreadId: parent, targetThreadId: lead, label: "questions" });
+
+    const { self, connections } = yield* readHarnessConnections(parent);
+    assert.deepStrictEqual(self, { name: "parent", role: null });
+    assert.deepStrictEqual(
+      connections.map((agent) => [agent.threadId, agent.role, agent.relationships]),
+      [
+        [lead, null, ["your lead", "you → them: questions"]],
+        [reviewer, "Reviewer", ["them → you: review"]],
+      ],
+    );
+    assert.deepStrictEqual(
+      (yield* readHarnessConnections(lead)).connections.map((agent) => agent.relationships),
+      [["your delegate", "them → you: questions"]],
+    );
+    assert.equal((yield* readHarnessConnections(stranger)).connections.length, 0);
   }).pipe(Effect.provide(testLayer)),
 );
