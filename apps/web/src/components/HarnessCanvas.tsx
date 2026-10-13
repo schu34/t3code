@@ -30,6 +30,7 @@ import {
   Link2Icon,
   MessageCircleIcon,
   PlusIcon,
+  Settings2Icon,
   XIcon,
   ZapIcon,
 } from "lucide-react";
@@ -47,6 +48,7 @@ import {
   type HarnessCanvasPosition,
   type HarnessCanvasSnapshot,
   type HarnessEdgeKind,
+  layoutHarnessCanvasAgents,
   mergeHarnessCanvasNodeState,
   selectHarnessCanvasNodeSelection,
   selectHarnessCanvasGraph,
@@ -56,6 +58,7 @@ export interface HarnessCanvasProps {
   readonly snapshot: HarnessCanvasSnapshot;
   readonly actions: HarnessCanvasActions | null;
   readonly onSelectAgent: (agent: HarnessCanvasAgent) => void;
+  readonly onEditDefinitions?: () => void;
   readonly onCloseChat?: () => void;
   readonly selectedAgentId?: string | null;
   readonly className?: string;
@@ -423,10 +426,11 @@ function HarnessCanvasInner({
   snapshot,
   actions,
   onSelectAgent,
+  onEditDefinitions,
   selectedAgentId = null,
   className,
 }: HarnessCanvasProps) {
-  const [showArchivedCompleted, setShowArchivedCompleted] = useState(true);
+  const [showArchivedCompleted, setShowArchivedCompleted] = useState(false);
   const [collapsedAgentIds, setCollapsedAgentIds] = useState<ReadonlySet<string>>(new Set());
   const [showDetails, setShowDetails] = useState(false);
   const [localPositions, setLocalPositions] = useState<ReadonlyMap<string, HarnessCanvasPosition>>(
@@ -437,10 +441,21 @@ function HarnessCanvasInner({
   const nodesInitialized = useNodesInitialized();
   const { fitView } = useReactFlow();
 
-  const visibleSnapshot = useMemo(
-    () => selectHarnessCanvasGraph(snapshot, { collapsedAgentIds, showArchivedCompleted }),
-    [collapsedAgentIds, showArchivedCompleted, snapshot],
-  );
+  const visibleSnapshot = useMemo(() => {
+    const visible = selectHarnessCanvasGraph(snapshot, {
+      collapsedAgentIds,
+      showArchivedCompleted,
+    });
+    // Lay out only the shown agents so hidden ones leave no gaps; the top inset
+    // clears the toolbar panels.
+    return {
+      ...visible,
+      agents: layoutHarnessCanvasAgents(
+        visible.agents.map((agent) => ({ ...agent, position: null })),
+        { topInset: 280 },
+      ),
+    };
+  }, [collapsedAgentIds, showArchivedCompleted, snapshot]);
   const projectGroups = useMemo(() => projectCounts(visibleSnapshot), [visibleSnapshot]);
 
   const onCreateChild = useCallback(
@@ -591,6 +606,15 @@ function HarnessCanvasInner({
               </span>
             </div>
             <div className="h-4 w-px bg-border/75" aria-hidden="true" />
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={onEditDefinitions}
+              aria-label="Edit Harness roles"
+            >
+              <Settings2Icon aria-hidden="true" />
+              Roles
+            </Button>
             <Button
               size="xs"
               variant="ghost"

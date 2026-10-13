@@ -1,24 +1,29 @@
 import { DEFAULT_MODEL, ProviderInstanceId } from "@t3tools/contracts";
 import type { EnvironmentId, HarnessGraphSnapshot, ThreadId, TurnId } from "@t3tools/contracts";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useComposerDraftStore, markPromotedDraftThreadByRef } from "../composerDraftStore";
 import { threadEnvironment } from "../state/threads";
 
-import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import {
+  scopedProjectKey,
+  scopeProjectRef,
+  scopeThreadRef,
+} from "@t3tools/client-runtime/environment";
 import { SidebarInset } from "./ui/sidebar";
 import HarnessCanvas from "./HarnessCanvas";
+import HarnessDefinitionDialog from "./HarnessDefinitionDialog";
 import {
   buildHarnessCanvasSnapshotFromThreads,
   deriveHarnessCreationEdges,
   harnessAgentId,
-  layoutHarnessCanvasAgents,
   type HarnessCanvasActions,
   type HarnessCanvasAgent,
   type HarnessCanvasSnapshot,
 } from "../harnessCanvas.logic";
 import { useRightPanelStore } from "../rightPanelStore";
 import {
+  harnessGraphCreateRole,
   harnessGraphRead,
   harnessGraphSetAgent,
   harnessGraphSubscribe,
@@ -29,6 +34,9 @@ import { useProjects, useThreadShells } from "../state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
+import { useClientSettings } from "../hooks/useSettings";
+import { buildProjectGroups, selectProjectGroupingSettings } from "../logicalProject";
+import { useUiStateStore } from "../uiStateStore";
 
 type GraphAgent = HarnessGraphSnapshot["agents"][number];
 
@@ -111,8 +119,6 @@ function buildSnapshot(
             : ("sidechat" as const),
       parentAgentId:
         parentThreadId === undefined ? null : harnessAgentId(environmentId, parentThreadId),
-      // Base positions are fallback layout, not user-dragged session positions.
-      position: null,
     };
   });
   const edges = [
@@ -126,7 +132,7 @@ function buildSnapshot(
     })),
   ];
   return {
-    agents: layoutHarnessCanvasAgents(agentsWithProvenance, { topInset: 280 }),
+    agents: agentsWithProvenance,
     edges,
   };
 }
@@ -139,18 +145,52 @@ export default function HarnessWorkspace() {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const { environments } = useEnvironments();
   const environmentId = primaryEnvironmentId ?? environments[0]?.environmentId ?? null;
-  const projects = useProjects();
-  const threads = useThreadShells();
+  const allProjects = useProjects();
+  const allThreads = useThreadShells();
+  // The canvas follows the sidebar's project filter so it shows the same work.
+  const projectScopeKey = useUiStateStore((store) => store.sidebarProjectScopeKey);
+  const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
+  const projects = useMemo(() => {
+    const environmentProjects = allProjects.filter(
+      (project) => project.environmentId === environmentId,
+    );
+    if (projectScopeKey === null) return environmentProjects;
+    const group = buildProjectGroups({
+      projects: allProjects,
+      settings: projectGroupingSettings,
+      preferredEnvironmentId: environmentId,
+    }).find((candidate) => candidate.key === projectScopeKey);
+    if (group === undefined) return environmentProjects;
+    const members = new Set(group.memberProjectRefs.map((ref) => scopedProjectKey(ref)));
+    return environmentProjects.filter((project) =>
+      members.has(scopedProjectKey(scopeProjectRef(project.environmentId, project.id))),
+    );
+  }, [allProjects, environmentId, projectGroupingSettings, projectScopeKey]);
+  const threads = useMemo(() => {
+    const projectIds = new Set<string>(projects.map((project) => project.id));
+    return allThreads.filter(
+      (thread) => thread.environmentId === environmentId && projectIds.has(thread.projectId),
+    );
+  }, [allThreads, environmentId, projects]);
   const navigate = useNavigate();
+  const [isDefinitionDialogOpen, setDefinitionDialogOpen] = useState(false);
   const newThread = useNewThreadHandler();
-  const latestProject = projects.find((project) => project.environmentId === environmentId);
+  const latestProject = projects[0];
   const graphRead = useEnvironmentQuery(
     environmentId === null ? null : harnessGraphRead({ environmentId, input: {} }),
   );
   const graphLive = useEnvironmentQuery(
     environmentId === null ? null : harnessGraphSubscribe({ environmentId, input: {} }),
   );
-  const graph = graphLive.data ?? graphRead.data;
+  const unscopedGraph = graphLive.data ?? graphRead.data;
+  const graph = useMemo((): HarnessGraphSnapshot | null => {
+    if (unscopedGraph == null) return null;
+    const projectIds = new Set<string>(projects.map((project) => project.id));
+    return {
+      ...unscopedGraph,
+      agents: unscopedGraph.agents.filter((agent) => projectIds.has(agent.projectId)),
+    };
+  }, [projects, unscopedGraph]);
   const snapshot = useMemo(
     () =>
       environmentId === null
@@ -160,6 +200,7 @@ export default function HarnessWorkspace() {
   );
 
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
+  const createRole = useAtomCommand(harnessGraphCreateRole, { reportFailure: false });
   const setAgent = useAtomCommand(harnessGraphSetAgent, { reportFailure: false });
   const upsertEdge = useAtomCommand(harnessGraphUpsertEdge, { reportFailure: false });
 
@@ -299,13 +340,24 @@ export default function HarnessWorkspace() {
   );
 
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
-      <HarnessCanvas
-        snapshot={snapshot}
-        actions={actions}
-        onSelectAgent={onSelectAgent}
-        className="min-h-0"
+    <>
+      <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+        <HarnessCanvas
+          snapshot={snapshot}
+          actions={actions}
+          onSelectAgent={onSelectAgent}
+          onEditDefinitions={() => setDefinitionDialogOpen(true)}
+          className="min-h-0"
+        />
+      </SidebarInset>
+      <HarnessDefinitionDialog
+        open={isDefinitionDialogOpen}
+        onOpenChange={setDefinitionDialogOpen}
+        projects={projects.map((project) => ({ id: project.id, title: project.title }))}
+        graph={graph}
+        onCreateRole={(input) => run(createRole, input)}
+        onAssignRole={(input) => run(setAgent, input)}
       />
-    </SidebarInset>
+    </>
   );
 }

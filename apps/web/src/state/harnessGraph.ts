@@ -23,6 +23,11 @@ export const harnessGraphSubscribe = createEnvironmentRpcSubscriptionAtomFamily(
   },
 );
 
+export const harnessGraphCreateRole = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:harness-graph:create-role",
+  tag: WS_METHODS.harnessGraphCreateRole,
+});
+
 export const harnessGraphSetAgent = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "environment-data:harness-graph:set-agent",
   tag: WS_METHODS.harnessGraphSetAgent,
