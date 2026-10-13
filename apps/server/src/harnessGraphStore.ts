@@ -397,3 +397,120 @@ export const makeHarnessGraphStore = Effect.fnUntraced(function* (changes: PubSu
 
   return { read, createRole, setAgent, upsertEdge };
 });
+
+export interface HarnessConnection {
+  readonly threadId: ThreadId;
+  readonly name: string;
+  readonly role: string | null;
+  /** How the caller relates to this agent, e.g. "your lead" or "you → them: review". */
+  readonly relationships: ReadonlyArray<string>;
+  readonly status: string;
+  readonly branch: string | null;
+  readonly worktreePath: string | null;
+}
+
+export interface HarnessConnections {
+  readonly self: { readonly name: string; readonly role: string | null } | null;
+  readonly connections: ReadonlyArray<HarnessConnection>;
+}
+
+/**
+ * The agents a thread may message: both ends of its edges plus its lead and
+ * delegates. Deleted threads and threads moved to another project drop out.
+ */
+export const readHarnessConnections = Effect.fnUntraced(function* (threadId: ThreadId) {
+  const sql = yield* SqlClient.SqlClient;
+  const [self] = yield* sql<{ title: string; role_name: string | null }>`
+    SELECT
+      t.title,
+      r.name AS role_name
+    FROM projection_threads t
+    LEFT JOIN harness_agents a
+      ON a.thread_id = t.thread_id
+    LEFT JOIN harness_roles r
+      ON r.role_id = a.role_id
+    WHERE t.thread_id = ${threadId}
+      AND t.deleted_at IS NULL
+  `;
+  const rows = yield* sql<{
+    thread_id: string;
+    title: string;
+    role_name: string | null;
+    relationship: string;
+    archived_at: string | null;
+    session_status: string | null;
+    branch: string | null;
+    worktree_path: string | null;
+  }>`
+    WITH links (thread_id, relationship, link_order) AS (
+      SELECT target_thread_id, 'you → them' || COALESCE(': ' || label, ''), 2
+      FROM harness_edges
+      WHERE source_thread_id = ${threadId}
+      UNION ALL
+      SELECT source_thread_id, 'them → you' || COALESCE(': ' || label, ''), 2
+      FROM harness_edges
+      WHERE target_thread_id = ${threadId}
+      UNION ALL
+      SELECT parent_thread_id, 'your lead', 0
+      FROM harness_agents
+      WHERE thread_id = ${threadId}
+        AND parent_thread_id IS NOT NULL
+      UNION ALL
+      SELECT thread_id, 'your delegate', 1
+      FROM harness_agents
+      WHERE parent_thread_id = ${threadId}
+    )
+    SELECT
+      t.thread_id,
+      t.title,
+      r.name AS role_name,
+      l.relationship,
+      t.archived_at,
+      s.status AS session_status,
+      t.branch,
+      t.worktree_path
+    FROM links l
+    JOIN projection_threads t
+      ON t.thread_id = l.thread_id
+    JOIN projection_threads me
+      ON me.thread_id = ${threadId}
+      AND me.project_id = t.project_id
+    LEFT JOIN harness_agents a
+      ON a.thread_id = t.thread_id
+    LEFT JOIN harness_roles r
+      ON r.role_id = a.role_id
+    LEFT JOIN projection_thread_sessions s
+      ON s.thread_id = t.thread_id
+    WHERE t.deleted_at IS NULL
+      AND t.thread_kind = 'user'
+      AND t.thread_id != ${threadId}
+    ORDER BY
+      l.link_order,
+      t.created_at,
+      t.thread_id,
+      l.relationship
+  `;
+  const connections = new Map<string, HarnessConnection & { relationships: string[] }>();
+  for (const row of rows) {
+    const existing = connections.get(row.thread_id);
+    if (existing) {
+      if (!existing.relationships.includes(row.relationship)) {
+        existing.relationships.push(row.relationship);
+      }
+      continue;
+    }
+    connections.set(row.thread_id, {
+      threadId: ThreadId.make(row.thread_id),
+      name: row.title,
+      role: row.role_name,
+      relationships: [row.relationship],
+      status: row.archived_at !== null ? "archived" : (row.session_status ?? "idle"),
+      branch: row.branch,
+      worktreePath: row.worktree_path,
+    });
+  }
+  return {
+    self: self ? { name: self.title, role: self.role_name } : null,
+    connections: [...connections.values()],
+  } satisfies HarnessConnections;
+});

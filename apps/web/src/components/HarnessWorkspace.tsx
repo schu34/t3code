@@ -4,6 +4,9 @@ import { useCallback, useMemo, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useComposerDraftStore, markPromotedDraftThreadByRef } from "../composerDraftStore";
 import { threadEnvironment } from "../state/threads";
+import { vcsEnvironment } from "../state/vcs";
+import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
+import { randomHex } from "../lib/utils";
 
 import {
   scopedProjectKey,
@@ -200,6 +203,7 @@ export default function HarnessWorkspace() {
   );
 
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
+  const createWorktree = useAtomCommand(vcsEnvironment.createWorktree, { reportFailure: false });
   const createRole = useAtomCommand(harnessGraphCreateRole, { reportFailure: false });
   const setAgent = useAtomCommand(harnessGraphSetAgent, { reportFailure: false });
   const upsertEdge = useAtomCommand(harnessGraphUpsertEdge, { reportFailure: false });
@@ -225,8 +229,10 @@ export default function HarnessWorkspace() {
     [environmentId],
   );
 
+  // Each agent works in its own worktree, branched from its lead's branch, so
+  // agents never edit the same checkout and the lead merges their branches.
   const createGraphThread = useCallback(
-    async (projectId: HarnessCanvasAgent["projectId"], title: string) => {
+    async (projectId: HarnessCanvasAgent["projectId"], title: string, baseBranch?: string) => {
       if (environmentId === null) return null;
       const result = await newThread(scopeProjectRef(environmentId, projectId), {
         reuseExistingDraft: false,
@@ -238,6 +244,24 @@ export default function HarnessWorkspace() {
       if (!draft) return null;
       const composer = state.getComposerDraft(result.draftId);
       const project = projects.find((p) => p.environmentId === environmentId && p.id === projectId);
+      const worktree =
+        project === undefined
+          ? null
+          : await createWorktree({
+              environmentId,
+              input: {
+                cwd: project.workspaceRoot,
+                refName: baseBranch ?? "HEAD",
+                newRefName: buildTemporaryWorktreeBranchName(randomHex),
+                ...(baseBranch === undefined ? {} : { baseRefName: baseBranch }),
+                path: null,
+              },
+            });
+      // Projects outside version control keep sharing the project checkout.
+      const checkout =
+        worktree?._tag === "Success"
+          ? { branch: worktree.value.worktree.refName, worktreePath: worktree.value.worktree.path }
+          : { branch: draft.branch, worktreePath: draft.worktreePath };
       const modelSelection = (composer?.activeProvider
         ? composer.modelSelectionByProvider[composer.activeProvider]
         : undefined) ??
@@ -254,8 +278,7 @@ export default function HarnessWorkspace() {
           modelSelection,
           runtimeMode: draft.runtimeMode,
           interactionMode: draft.interactionMode,
-          branch: draft.branch,
-          worktreePath: draft.worktreePath,
+          ...checkout,
           createdAt: draft.createdAt,
         },
       });
@@ -268,7 +291,7 @@ export default function HarnessWorkspace() {
       });
       return result;
     },
-    [createThread, environmentId, navigate, newThread, projects],
+    [createThread, createWorktree, environmentId, navigate, newThread, projects],
   );
 
   const actions = useMemo<HarnessCanvasActions | null>(() => {
@@ -280,7 +303,8 @@ export default function HarnessWorkspace() {
     ): Promise<void> => {
       const parent = snapshot.agents.find((agent) => agent.id === agentId);
       if (parent === undefined || parent.backing.kind !== "thread") return;
-      const result = await createGraphThread(parent.projectId, title);
+      const parentBranch = threads.find((thread) => thread.id === parent.backing.threadId)?.branch;
+      const result = await createGraphThread(parent.projectId, title, parentBranch ?? undefined);
       if (result === null) return;
       await run(setAgent, {
         threadId: result.threadId,
@@ -312,6 +336,7 @@ export default function HarnessWorkspace() {
     setAgent,
     snapshot.agents,
     threadIdFor,
+    threads,
     upsertEdge,
   ]);
 
